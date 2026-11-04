@@ -149,6 +149,50 @@
       "cheapKeywords": ["arteries", "pulmonary artery"]
     },
     {
+      "id": "explain-carbon-1",
+      "mode": "explain",
+      "docFilename": "carbon compound notes.pdf",
+      "concept": "catenation in carbon compounds",
+      "keyFacts": [
+        "catenation is the ability of an element (carbon) to combine with itself through covalent bonds",
+        "carbon can form chain, branched, and ring structures with itself"
+      ],
+      "cheapKeywords": ["catenation", "covalent", "chain"]
+    },
+    {
+      "id": "explain-light-1",
+      "mode": "explain",
+      "docFilename": "light notes.pdf",
+      "concept": "sign convention and focal length for concave mirrors",
+      "keyFacts": [
+        "for a concave mirror, the focal length f is negative",
+        "a concave mirror can form either a real or a virtual image depending on the object's distance from the mirror"
+      ],
+      "cheapKeywords": ["concave", "negative", "real", "virtual"]
+    },
+    {
+      "id": "explain-lifeproc-1",
+      "mode": "explain",
+      "docFilename": "life Processes notes.pdf",
+      "concept": "ATP yield difference between aerobic and anaerobic respiration",
+      "keyFacts": [
+        "aerobic respiration yields 38 ATP",
+        "anaerobic respiration yields only 2 ATP"
+      ],
+      "cheapKeywords": ["38 ATP", "2 ATP", "aerobic", "anaerobic"]
+    },
+    {
+      "id": "explain-lifeproc-2",
+      "mode": "explain",
+      "docFilename": "life Processes notes.pdf",
+      "concept": "structure of a nephron",
+      "keyFacts": [
+        "nephrons are the basic filtering units of the kidney",
+        "the main components of a nephron are the glomerulus, Bowman's capsule, and a long renal tube"
+      ],
+      "cheapKeywords": ["nephron", "glomerulus", "Bowman"]
+    },
+    {
       "id": "qp-control-coordination",
       "mode": "questionPaper",
       "docFilename": "control coordination test.pdf",

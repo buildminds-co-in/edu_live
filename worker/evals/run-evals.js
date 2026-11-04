@@ -29,6 +29,15 @@
 // --admin-key       Falls back to ADMIN_API_KEY from the environment or
 //                   worker/.dev.vars.
 // --out-dir         Defaults to evals/results/ (gitignored).
+//
+// Case modes (golden-cases.json "mode" field): "chat" (/chat, answerStyle=auto -
+// strictly grounded, no model override support issue here since /chat honors
+// modelOverride), "explain" (/explain, Concept Explainer - note: /explain has
+// no modelOverride or admin-key gate, so this mode always reflects whatever
+// model is live in production config, not --model), "questionPaper"
+// (/question-paper/generate + /answer-key, deliberately allowed to fall back
+// to general syllabus knowledge where source text is thin - see
+// questionPaperGeneration.ts).
 
 const fs = require("fs");
 const path = require("path");
@@ -154,6 +163,40 @@ async function runChatCase(workerUrl, adminKey, modelOverride, testCase) {
   return { answerText: body.answer || "", raw: body };
 }
 
+// /explain has no modelOverride support (explain.ts always uses the live
+// config's provider/model) and no admin-key gate, unlike /chat and
+// /question-paper/generate - so modelOverride is accepted here only to keep
+// the call signature consistent with the other run*Case functions, and is
+// silently ignored.
+async function runExplainCase(workerUrl, _adminKey, _modelOverride, testCase) {
+  const response = await fetch(`${workerUrl}/explain`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ concept: testCase.concept }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || `/explain failed (${response.status})`);
+  // Combine every prose/structured field the student actually sees - a fact
+  // could legitimately land in "definition" or a table cell instead of
+  // simpleExplanation, and the judge should see all of it.
+  const tableText = body.table
+    ? [body.table.headers?.join(" | "), ...(body.table.rows || []).map((r) => r.join(" | "))]
+        .filter(Boolean)
+        .join("\n")
+    : "";
+  const combinedText = [
+    body.simpleExplanation,
+    Array.isArray(body.steps) ? body.steps.join(" ") : "",
+    body.formula,
+    body.definition,
+    tableText,
+    body.realWorldExample,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return { answerText: combinedText, raw: body };
+}
+
 async function runQuestionPaperCase(workerUrl, adminKey, modelOverride, testCase) {
   const genResponse = await fetch(`${workerUrl}/question-paper/generate`, {
     method: "POST",
@@ -237,6 +280,17 @@ async function main() {
           judgeModel,
         });
         results.push({ id: testCase.id, mode: "chat", pass: verdict.pass, reason: verdict.reason, answerText });
+        console.log(verdict.pass ? "PASS" : `FAIL - ${verdict.reason}`);
+      } else if (testCase.mode === "explain") {
+        const { answerText } = await runExplainCase(workerUrl, adminKey, modelOverride, testCase);
+        const verdict = await grade(gradeMode, {
+          keyFacts: testCase.keyFacts,
+          cheapKeywords: testCase.cheapKeywords,
+          answerText,
+          openrouterKey,
+          judgeModel,
+        });
+        results.push({ id: testCase.id, mode: "explain", pass: verdict.pass, reason: verdict.reason, answerText });
         console.log(verdict.pass ? "PASS" : `FAIL - ${verdict.reason}`);
       } else if (testCase.mode === "questionPaper") {
         const { marksTotal, combinedText } = await runQuestionPaperCase(workerUrl, adminKey, modelOverride, testCase);
