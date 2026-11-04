@@ -1,5 +1,9 @@
 const WORKER_URL = "https://edu-live-worker.buildminds-co-in.workers.dev";
 
+if (new URLSearchParams(window.location.search).has("embed")) {
+  document.documentElement.classList.add("embed-mode");
+}
+
 const THEME_STORAGE_KEY = "edukripa-theme";
 const themeToggle = document.getElementById("theme-toggle");
 

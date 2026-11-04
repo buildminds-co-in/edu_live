@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A Cloudflare-native RAG chatbot for science/maths Q&A, aimed at 16-17 year old students. Free-tier stack: Workers, Vectorize, Workers AI, R2, D1, Pages. Two independently deployed pieces:
 
-- `worker/` — the API (one Cloudflare Worker, `edu-live-worker`): `POST /ingest` (upload + index a PDF), `POST /chat` (ask a question), `GET /images/:key` (serve a captured page screenshot), and `/admin/*` (dashboard data + config).
+- `worker/` — the API (one Cloudflare Worker, `edu-live-worker`): `POST /ingest` (upload + index a PDF), `POST /chat` (ask a question), `POST /explain` (Concept Explainer), `/question-paper/*` (generate a question paper + answer key from indexed chapters), `GET /images/:key` (serve a captured page screenshot), and `/admin/*` (dashboard data + config).
 - `frontend/` — two independent static Cloudflare Pages sites, deployed separately:
   - `index.html`/`app.js`/`style.css` — the student-facing chat app. No upload UI.
   - `dashboard.html`/`dashboard.js`/`dashboard.css` — the admin-only operator dashboard (Data Ingestion Dashboard / TransactionTracker / Costing / Settings tabs). PDF uploads happen here, not on the chat page.
@@ -89,13 +89,35 @@ Public, no auth. Fixed pipeline, `config` read fresh from D1 on every call (`con
 8. `buildTransactionTrace()` (`transactionTrace.ts`) assembles one full record (every chunk's scores + kept/discarded, LLM I/O, provider/model, JEV model, token estimates) → inserted into D1 via `ctx.waitUntil()` (fire-and-forget, never delays the response).
 9. Response includes `docSources` (each with `pageImageKey` when available) — the frontend renders the actual page screenshot as an `<img>` below the answer when present, not just the `[Figure: ...]` text description.
 
+### Concept Explainer (`POST /explain`, `explain.ts`)
+
+Public, no auth, gated only by `config.conceptExplainerEnabled`. Separate pipeline from `/chat` — retrieval is the same shape (embed → `VECTORIZE.query` → rerank → JEV → confidence gate) but generation and output are different:
+
+- Same **guardrail** as chat (fails closed), run on the `concept` string instead of a question.
+- Response is **structured JSON**, not prose: `{ concept, simpleExplanation, steps, formula, definition, table, realWorldExample }`, parsed tolerantly from a fenced ```json block (`parseExplainLlmResponse()` never throws — a truncated/malformed LLM response falls back to raw text in `simpleExplanation` with every other field `null`, same "never throws" posture as `parseEnrichedPages()` in ingestion).
+- **Source-fidelity policy is a dashboard-configurable toggle**, `config.explainRetrievalMode` — this is the one place in the whole pipeline where "stay grounded in the documents" is *not* a fixed rule:
+  - `rag_fallback` — strictly grounded when context was retrieved ("do not add outside facts... even ones you know to be true"); only falls back to the LLM's general knowledge when retrieval found *nothing* for the concept.
+  - `rag_plus_llm` (**default**) — context (if any) is the primary source of truth for facts/formulas/definitions, but the LLM is explicitly told it "may and should complete the explanation (steps, plain-language framing, a real-world example)" from its own general knowledge, as long as it doesn't contradict the retrieved context.
+  - Response carries `groundedIn: "documents" | "general_knowledge" | "both"` so the frontend/eval tooling can tell which policy applied to a given answer.
+- No `modelOverride` support and no admin-key gate (unlike `/chat` and `/question-paper/generate`) — it always generates with whatever `config.llmProvider`/`llmModelSlug` is live in production, which matters for eval tooling (see Testing conventions below).
+- Same transaction-trace-on-`ctx.waitUntil()` pattern as chat, `pathTaken: "concept_explainer"`.
+
+### Question paper generation (`/question-paper/*`, `questionPaperGeneration.ts` + friends)
+
+- `GET /question-paper/catalog` — lists indexed chapters available to build a paper from.
+- `POST /question-paper/generate` — builds a paper against a blueprint of question-type "slots" (`questionPaperBlueprints.ts`) from one or more ingested chapters; admin-key-gated `modelOverride` lets eval tooling test a candidate model without touching the live config.
+- `POST /question-paper/:id/answer-key` — generates the answer key for a previously generated paper.
+- `GET /question-paper/:id/pdf` / `/answer-key-pdf` — rendered PDF downloads (`questionPaperPdf.ts`).
+- **Deliberately allowed to use outside knowledge, unlike every other generation path in this codebase**: the prompt says "Prefer the provided source text; where it's thin, use your own syllabus knowledge rather than inventing facts" — if the source chapter is itself a ready-made question paper (a past CBSE test with an official answer key), reuse its question wording and official answer verbatim rather than re-deriving one.
+- Results are cached (`questionPaperCache.ts`) keyed by inputs including any `modelOverride`, so an eval rerun against a candidate model doesn't collide with or reuse the real production cache entry for the same chapters.
+
 ### Admin (`/admin/*`, `admin.ts`)
 
 Gated by `x-admin-key` (optional — unauthenticated if unset, e.g. local dev). Routes: `GET /admin/documents` (lists R2 objects, excluding `page-images/` and `cleaned/` prefixes; includes the `enriched` flag), `GET /admin/documents/cleaned?name=` (fetches one document's enriched text on demand), `GET /admin/transactions`, `GET /admin/costing`, `GET`/`PUT /admin/config`.
 
 ### Runtime config (`config.ts`)
 
-D1-backed (`config` table, key/value), typed, validated, with safe defaults if D1 is unreachable. Every field is editable from the dashboard's Settings tab and takes effect on the **next** request — no redeploy (Workers have no long-running process to restart). Fields: `topK`, `confidenceThreshold`, `webSearchMode`, `hardFailNoDocument`, `jevEnabled`, `jevRelevanceThreshold`, `guardrailEnabled`, `llmProvider`, `llmModelSlug`, `ingestionEnrichmentEnabled`, `ingestionModelSlug`.
+D1-backed (`config` table, key/value), typed, validated, with safe defaults if D1 is unreachable. Every field is editable from the dashboard's Settings tab and takes effect on the **next** request — no redeploy (Workers have no long-running process to restart). Fields: `topK`, `confidenceThreshold`, `webSearchMode`, `hardFailNoDocument`, `jevEnabled`, `jevRelevanceThreshold`, `guardrailEnabled`, `llmProvider`, `llmModelSlug`, `ingestionEnrichmentEnabled`, `ingestionModelSlug`, `explainRetrievalMode`, `conceptExplainerEnabled`, `questionPaperModelSlug` (falls back to `llmModelSlug` at read time if unset — lets question papers follow a separate model from chat), `questionPaperImageGenEnabled` (off by default — image-gen models produce unreliable output for technical diagrams), `evalModelSlug` (not read by any production code path — purely a convenience default for `--model` in the manual eval script, see Testing conventions).
 
 ### Storage
 
@@ -110,6 +132,8 @@ Most stages fail open (degrade gracefully): reranker → cosine order, JEV → u
 ### Testing conventions
 
 Vitest, mocked `Env` bindings (`AI`, `VECTORIZE`, `PDF_BUCKET`, `EDU_LIVE_DB`, `BROWSER` all stubbed per-test). `worker/test/*.test.ts` mirrors `worker/src/*.ts` one-to-one. Fail-open/fail-closed contracts are the thing most worth testing explicitly when touching any pipeline stage — every stage above has a test asserting its specific failure behavior, not just its happy path.
+
+**Manual eval harness** (`worker/evals/`, `npm run eval`, never CI-triggered) — a separate golden-set regression suite that runs real HTTP calls against a deployed worker, for before/after comparisons around a model swap, prompt rewrite, or retrieval change. `golden-cases.json` cases carry a `mode`: `"chat"`, `"explain"`, or `"questionPaper"`, each dispatched to its own `run*Case()` function in `run-evals.js`. Grading is an LLM judge by default (`google/gemini-2.5-flash` — deliberately a different model than whatever's under test, so it isn't grading its own homework); it checks each case's `keyFacts` are conveyed *in meaning* against the generated output, paraphrase/extra-detail tolerant, only failing on a missing/contradicted/wrong fact. **The judge never reads the source PDFs or retrieved chunks** — it only sees the hand-authored `keyFacts` list and the generated answer, so it's a closed-book check against facts a human verified ahead of time, not an automated groundedness/hallucination check. `--no-judge` falls back to a cheap literal `cheapKeywords` substring check for a zero-LLM-call sanity pass. Per-mode grounding expectations differ and the harness's `keyFacts` should reflect them: `chat` is strictly grounded (no answer style permits adding outside facts, see Chat section above); `explain` depends on the live `explainRetrievalMode` (strict under `rag_fallback`-with-context, more lenient under the default `rag_plus_llm`); `questionPaper` deliberately allows syllabus-knowledge fill-in where source text is thin. `explain` cases always reflect whatever model is live in production config — `/explain` has no `modelOverride` support, unlike `/chat` and `/question-paper/generate`.
 
 ### Design history
 
