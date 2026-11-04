@@ -1,4 +1,4 @@
-const WORKER_URL = "https://edu-live-worker.naveed-ks.workers.dev";
+const WORKER_URL = "https://edu-live-worker.buildminds-co-in.workers.dev";
 
 const THEME_STORAGE_KEY = "edukripa-theme";
 const themeToggle = document.getElementById("theme-toggle");

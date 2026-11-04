@@ -1,5 +1,6 @@
 name = "edu-live-worker"
 main = "src/index.ts"
+account_id = "665961d811029d3117ce11b8053eea18"
 compatibility_date = "2026-09-28"
 compatibility_flags = ["nodejs_compat"]
 
@@ -18,7 +19,7 @@ bucket_name = "edu-live-pdfs"
 [[d1_databases]]
 binding = "EDU_LIVE_DB"
 database_name = "edu-live-db"
-database_id = "84db96aa-c71e-4f39-bf14-3ae05faa9f2f"
+database_id = "f12708d6-047e-4a0a-a929-24ae19dc298d"
 
 [browser]
 binding = "BROWSER"

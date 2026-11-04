@@ -1,6 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "frontend",
+  "name": "edu-live-frontend",
+  "account_id": "665961d811029d3117ce11b8053eea18",
   "compatibility_date": "2026-09-26",
   "observability": {
     "enabled": true

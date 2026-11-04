@@ -39,7 +39,7 @@ const path = require("path");
 // proven reachable via OpenRouter elsewhere in this codebase (ingestion
 // enrichment uses the same slug).
 const JUDGE_MODEL_DEFAULT = "google/gemini-2.5-flash";
-const DEFAULT_WORKER_URL = "https://edu-live-worker.naveed-ks.workers.dev";
+const DEFAULT_WORKER_URL = "https://edu-live-worker.buildminds-co-in.workers.dev";
 
 function parseArgs(argv) {
   const args = {};
