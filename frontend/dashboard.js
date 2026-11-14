@@ -196,6 +196,7 @@ async function loadDocumentsTab() {
           <td>${doc.pageCount ?? "—"}</td>
           <td>${doc.chunkCount ?? "—"}</td>
           <td>${doc.enriched === null ? "—" : doc.enriched ? "Yes" : "No"}</td>
+          <td>${doc.subject ? `Yes (${escapeHtml(doc.subject)})` : "No"}</td>
         </tr>`
       )
       .join("");
@@ -238,7 +239,7 @@ async function loadDocumentsTab() {
         <h2>Raw PDFs</h2>
         <p class="txn-meta">The original uploaded PDF files, as stored.</p>
         <table>
-          <thead><tr><th>File</th><th>Size</th><th>Indexed</th><th>Pages</th><th>Chunks</th><th>Enriched</th></tr></thead>
+          <thead><tr><th>File</th><th>Size</th><th>Indexed</th><th>Pages</th><th>Chunks</th><th>Enriched</th><th>Question papers</th></tr></thead>
           <tbody>${rawRows}</tbody>
         </table>
       </div>
