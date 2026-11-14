@@ -457,5 +457,8 @@ describe("handleChat system prompt", () => {
 
     expect(capturedSystemPrompt).toMatch(/\[Figure:/);
     expect(capturedSystemPrompt).toMatch(/do not (try to )?(redraw|reproduce|transcribe)/i);
+    // Exam papers and answer keys: questions/options are not facts; no mark tags.
+    expect(capturedSystemPrompt).toMatch(/not a fact/i);
+    expect(capturedSystemPrompt).toMatch(/[1]/);
   });
 });

@@ -53,6 +53,12 @@ as they appear in the context, delimiters included, in whichever field they land
 the $ delimiters, rewrite a formula in plain text, or drop the underscores/braces, even inside a table
 cell's JSON string.
 
+Exam papers and answer keys in the context: the context can include question papers and answer keys
+(marking schemes). A question, an answer option, or an assertion or reason statement from a question paper
+is not a fact, since options and assertions are often deliberately wrong - never explain one as true. Take
+facts from notes, explanations and answer keys. Do not include question numbers, mark allocations, step
+marks such as [1] or [½], or tutor-only notes in the explanation.
+
 ${RESPONSE_SCHEMA_INSTRUCTIONS}`;
 }
 

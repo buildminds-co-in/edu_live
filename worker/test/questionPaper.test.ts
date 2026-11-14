@@ -194,3 +194,21 @@ describe("handleQuestionPaperAnswerKey / handleQuestionPaperPdf", () => {
     expect(response.status).toBe(404);
   });
 });
+
+describe("question paper cache key", () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it("includes the prompt version, so papers cached under older prompts are regenerated", async () => {
+    vi.spyOn(config, "getRuntimeConfig").mockResolvedValue({ llmProvider: "openrouter", questionPaperModelSlug: "x", questionPaperImageGenEnabled: false } as any);
+    const keySpy = vi.spyOn(cache, "computeCacheKey");
+    vi.spyOn(cache, "findCachedPaper").mockResolvedValue(null);
+    vi.spyOn(retrieval, "fetchAllChapterChunks").mockResolvedValue({ found: [], missing: ["missing.pdf"] });
+    const request = new Request("http://worker/question-paper/generate", {
+      method: "POST",
+      body: JSON.stringify({ subject: "Science", chapterFilenames: ["missing.pdf"], marksTotal: 40 }),
+    });
+    await handleQuestionPaperGenerate(request, baseEnv());
+    expect(keySpy).toHaveBeenCalled();
+    expect(String(keySpy.mock.calls[0][3])).toContain(generation.QUESTION_PAPER_PROMPT_VERSION);
+  });
+});

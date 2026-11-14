@@ -272,7 +272,7 @@ describe("generatePaper", () => {
     expect(spy.mock.calls[0][1]).toBe(computeGenerationMaxTokens(count80));
     expect(computeGenerationMaxTokens(count80)).toBeGreaterThan(computeGenerationMaxTokens(totalQuestionCount()));
     expect(computeGenerationMaxTokens(1)).toBeGreaterThanOrEqual(4000);
-    expect(computeGenerationMaxTokens(100000)).toBeLessThanOrEqual(24000);
+    expect(computeGenerationMaxTokens(100000)).toBeLessThanOrEqual(32000);
   });
 });
 
@@ -353,5 +353,44 @@ describe("prompt chapter coverage", () => {
   it("returns the full text unchanged when it fits the budget", () => {
     const sampled = sampleChunkText(chaptersWithSlots[0].chunks);
     expect(sampled).toBe("Carbon forms covalent bonds.");
+  });
+});
+
+describe("buildGenerationPrompt: question papers and answer keys", () => {
+  const { system, user } = buildGenerationPrompt(blueprint, chaptersWithSlots);
+
+  it("tells the model how to recognise a paper's own answer key and that keys don't repeat question text", () => {
+    expect(system).toMatch(/answer key/i);
+    expect(system).toMatch(/does not repeat the question text/i);
+    expect(system).toMatch(/WithAnswers/);
+  });
+
+  it("matches answers by question number within the same paper's key, never another paper's", () => {
+    expect(system).toMatch(/matching by question number/i);
+    expect(system).toMatch(/never take an answer from a key that belongs to a different paper/i);
+  });
+
+  it("reuses questions verbatim, never twice, and skips questions a key marks as flawed", () => {
+    expect(system).toMatch(/copy that question's wording verbatim/i);
+    expect(system).toMatch(/never use the same question twice/i);
+    expect(system).toMatch(/flawed/i);
+  });
+
+  it("keeps mark tags out of question and answer text", () => {
+    expect(system).toMatch(/\[1\]/);
+    expect(system).toMatch(/marks belong only in the marks field/i);
+  });
+
+  it("asks for full official answers (points and steps) for written questions, and both OR alternatives", () => {
+    expect(user).toMatch(/key points, values and steps/i);
+    expect(user).toMatch(/OR alternative/);
+    expect(user).toMatch(/must be that official answer/i);
+  });
+});
+
+describe("QUESTION_PAPER_PROMPT_VERSION", () => {
+  it("is a non-empty string, used in the cache key so prompt changes regenerate cached papers", async () => {
+    const { QUESTION_PAPER_PROMPT_VERSION } = await import("../src/questionPaperGeneration");
+    expect(QUESTION_PAPER_PROMPT_VERSION).toMatch(/^prompt-/);
   });
 });

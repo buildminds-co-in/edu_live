@@ -102,3 +102,35 @@ describe("validateAnswerKey", () => {
     expect(() => validateAnswerKey({ entries: {} })).toThrow(GenerationError);
   });
 });
+
+describe("answer key prompt and size", () => {
+  it("keeps every point of the given correctAnswer and leaves out mark tags", async () => {
+    let system = "";
+    vi.spyOn(llm, "generateChatCompletion").mockImplementation(async (messages) => {
+      system = messages.find((m) => m.role === "system")?.content ?? "";
+      return { text: JSON.stringify({ entries: [{ section: "A", questionIndex: 0, answer: "x" }] }), provider: "openrouter", model: "x" };
+    });
+    await generateAnswerKey({} as Env, paper, { llmProvider: "openrouter", questionPaperModelSlug: "x" });
+    expect(system).toMatch(/keep every point, value and step/i);
+    expect(system).toMatch(/OR alternative/);
+    expect(system).toMatch(/\[1\]/);
+  });
+
+  it("scales max tokens with the number of questions, within bounds", async () => {
+    const { answerKeyMaxTokens } = await import("../src/questionPaperAnswerKey");
+    expect(answerKeyMaxTokens(1)).toBe(3000);
+    expect(answerKeyMaxTokens(38)).toBe(9500);
+    expect(answerKeyMaxTokens(1000)).toBe(16000);
+  });
+
+  it("passes the scaled limit to the model", async () => {
+    const { answerKeyMaxTokens } = await import("../src/questionPaperAnswerKey");
+    const spy = vi.spyOn(llm, "generateChatCompletion").mockResolvedValue({
+      text: JSON.stringify({ entries: [{ section: "A", questionIndex: 0, answer: "x" }] }),
+      provider: "openrouter",
+      model: "x",
+    });
+    await generateAnswerKey({} as Env, paper, { llmProvider: "openrouter", questionPaperModelSlug: "x" });
+    expect(spy.mock.calls[0][1]).toBe(answerKeyMaxTokens(1));
+  });
+});

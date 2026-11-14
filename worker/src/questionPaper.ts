@@ -3,7 +3,7 @@ import { getRuntimeConfig } from "./config";
 import { isAdminAuthorized } from "./admin";
 import { getBlueprint, distributeSlotsAcrossChapters } from "./questionPaperBlueprints";
 import { fetchAllChapterChunks } from "./questionPaperRetrieval";
-import { generatePaper, GenerationError } from "./questionPaperGeneration";
+import { generatePaper, GenerationError, QUESTION_PAPER_PROMPT_VERSION } from "./questionPaperGeneration";
 import { generateAnswerKey } from "./questionPaperAnswerKey";
 import { renderPaperHtml, renderAnswerKeyHtml, renderHtmlToPdf } from "./questionPaperPdf";
 import { computeCacheKey, findCachedPaper, saveNewPaper, findPaperById, saveAnswerKey, savePdfKey } from "./questionPaperCache";
@@ -94,7 +94,14 @@ export async function handleQuestionPaperGenerate(request: Request, env: Env): P
         ? body.modelOverride.trim()
         : null;
     const cacheKeySubject = modelOverride ? `${body.subject}::eval::${modelOverride}` : body.subject;
-    const cacheKey = computeCacheKey(cacheKeySubject, body.marksTotal, body.chapterFilenames, blueprint.version);
+    // The prompt version is part of the key so a prompt change regenerates
+    // papers instead of serving ones cached under the old prompts.
+    const cacheKey = computeCacheKey(
+      cacheKeySubject,
+      body.marksTotal,
+      body.chapterFilenames,
+      `${blueprint.version}|${QUESTION_PAPER_PROMPT_VERSION}`
+    );
     const cached = await findCachedPaper(env, cacheKey);
     if (cached) {
       return Response.json({ id: cached.id, paper: cached.paperJson, cached: true });

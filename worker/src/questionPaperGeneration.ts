@@ -55,9 +55,16 @@ export const MAX_GENERATED_DIAGRAMS = 3;
 // well above "the JSON alone would need this many tokens." Raised with
 // margin; the default model is OpenRouter's free tier, so a higher cap
 // doesn't cost more unless a paid model is configured.
-const TOKENS_PER_QUESTION = 450;
+// Raised from 450/24000 when correctAnswer started carrying the full official
+// answer (points and steps) for 2-5 mark questions, not just a final value.
+const TOKENS_PER_QUESTION = 600;
 const MIN_GENERATION_TOKENS = 4000;
-const MAX_GENERATION_TOKENS = 24000;
+const MAX_GENERATION_TOKENS = 32000;
+
+// Part of the question-paper cache key. Bump whenever the generation or
+// answer-key prompts change, so papers cached under the old prompts are
+// regenerated instead of being served from cache.
+export const QUESTION_PAPER_PROMPT_VERSION = "prompt-2026-11-15";
 
 export function computeGenerationMaxTokens(totalQuestions: number): number {
   return Math.min(MAX_GENERATION_TOKENS, Math.max(MIN_GENERATION_TOKENS, totalQuestions * TOKENS_PER_QUESTION));
@@ -103,18 +110,27 @@ export function buildGenerationPrompt(
     "You are an experienced CBSE/ICSE class 10 teacher setting an exam paper. " +
     "Follow the exact slot list given. Stay within standard NCERT/CBSE/ICSE class 10 syllabus " +
     "conventions. Prefer the provided source text; where it's thin, use your own syllabus " +
-    "knowledge rather than inventing facts. " +
-    "The source material may include ready-made question papers (a numbered list of questions) and their " +
-    "answer keys. These are often in separate documents: the questions in one source, the answers in another. " +
-    "Those questions and answers are pre-verified exam content. For any slot whose type and marks match a " +
-    "pre-existing question, copy that question's wording verbatim rather than writing a new one. " +
-    "Find its answer in any source provided, matching by the question's wording (question numbers may differ " +
-    "between documents, and two papers can share a subject without being the same test). Copy an answer only " +
-    "when its question matches. If no matching answer appears in any source, work the answer out from syllabus " +
-    "knowledge and do not describe it as official. Only compose an original question for a slot when no " +
-    "matching pre-existing question is left to reuse (e.g. the slot asks for a type, like assertion_reason, " +
-    "that the source doesn't contain). Return ONLY valid JSON matching the schema described, with no markdown " +
-    "fences and no commentary.";
+    "knowledge rather than inventing facts.\n\n" +
+    "Kinds of source: study notes, ready-made question papers (numbered questions with options and marks), and " +
+    "answer keys or marking schemes for those papers. A paper and its answer key are usually separate sources. " +
+    "An answer key lists answers by question number and usually does not repeat the question text. A key " +
+    "belongs to a paper when its file name is the paper's name with something like \"WithAnswers\" added, or " +
+    "when its title names the same paper.\n\n" +
+    "Reusing questions: questions in a provided question paper are pre-verified exam content. For any slot whose " +
+    "type and marks match one of them, copy that question's wording verbatim (with its options and any OR " +
+    "alternative) rather than writing a new one. A slot whose chapter is an answer key may reuse questions from " +
+    "the question paper that key belongs to, if that paper is provided. Never use the same question twice. Do not " +
+    "reuse a question that an answer key or its notes mark as flawed, as having no correct option, or as having " +
+    "an unclear diagram. Never turn answer-key text, marking instructions or tutor notes into questions; if a " +
+    "chapter's only source is an answer key and its paper is not provided, write new questions whose answers are " +
+    "in that key. Only compose an original question for a slot when no matching pre-existing question is left to " +
+    "reuse (e.g. the slot asks for a type, like assertion_reason, that the source doesn't contain).\n\n" +
+    "Answers: for a reused question, take its answer from the answer key of the same paper, matching by question " +
+    "number and checking that the answer fits the question's topic. Never take an answer from a key that belongs " +
+    "to a different paper, even when the question number is the same. If no matching answer is provided, or it " +
+    "does not fit the question, work the answer out from the source text or syllabus knowledge. Leave out mark " +
+    "tags such as [1], [½] or \"(2 marks)\" from question and answer text; marks belong only in the marks field.\n\n" +
+    "Return ONLY valid JSON matching the schema described, with no markdown fences and no commentary.";
 
   const slotLines = chapterSlotsInOrder(chaptersWithSlots)
     .map(
@@ -140,11 +156,13 @@ export function buildGenerationPrompt(
     `For questionType "mcq": the "text" field MUST end with exactly four lettered options on their own lines, ` +
     `formatted "(A) ...", "(B) ...", "(C) ...", "(D) ...". For questionType "assertion_reason": "text" must state ` +
     `"Assertion (A): ..." then "Reason (R): ...", followed by the four standard CBSE options (A)-(D) for how the ` +
-    `assertion and reason relate. For every question of every type, also return "correctAnswer": a short string ` +
-    `giving the correct option letter (for mcq/assertion_reason, e.g. "(B)") or the correct final value/result (for ` +
-    `short_answer/long_answer/case_based) - this must be determinable from the source material or standard syllabus ` +
-    `knowledge, never omitted and never invented without basis. If the source text includes an official answer for ` +
-    `a question you reused verbatim, "correctAnswer" must be that official answer, not a re-derived one.\n\n` +
+    `assertion and reason relate. For every question of every type, also return "correctAnswer". For ` +
+    `mcq/assertion_reason: the correct option letter, e.g. "(B)". For short_answer/long_answer/case_based: the ` +
+    `answer's key points, values and steps (several sentences is fine for higher marks), without mark tags; for a ` +
+    `question with an OR alternative, answer each alternative and label them. The answer must come from the source ` +
+    `material or standard syllabus knowledge, never omitted and never invented without basis. If the answer key of ` +
+    `the same paper gives the answer to a question you reused, "correctAnswer" must be that official answer (its ` +
+    `points and values), not a re-derived one.\n\n` +
     `Return JSON: {"questions": [{"section": string, "questionType": string, "marks": number, "text": string, ` +
     `"correctAnswer": string, "latex"?: string, "table"?: {"headers": string[], "rows": string[][]}}]}. The questions ` +
     `array must contain exactly the total count across all slots, in the same order as the slot list.`;

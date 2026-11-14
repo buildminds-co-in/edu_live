@@ -12,6 +12,13 @@ export interface AnswerKey {
   entries: AnswerKeyEntry[];
 }
 
+// A flat 3,000 tokens left about 80 tokens per answer on an 80-mark paper
+// (about 38 questions), which truncated mid-JSON once answers carried the full
+// official points. Scales with the paper, bounded.
+export function answerKeyMaxTokens(questionCount: number): number {
+  return Math.min(16000, Math.max(3000, questionCount * 250));
+}
+
 export async function generateAnswerKey(
   env: Env,
   paper: GeneratedPaper,
@@ -20,9 +27,12 @@ export async function generateAnswerKey(
   const system =
     "You are a CBSE/ICSE class 10 examiner writing a concise, mark-scheme-style answer key. " +
     "For each question, give the key points/model answer only - not a full essay. Where a correctAnswer is given, " +
-    "expand it into exam-answer phrasing (don't just repeat the option letter) rather than re-deriving it from " +
-    "scratch - it's already the grounded correct answer. Only work out the answer yourself for a question with no " +
-    "correctAnswer given. Return ONLY valid JSON.";
+    "it is the grounded answer, often the official answer from the paper's own answer key. Keep every point, " +
+    "value and step it contains, in the same order, and only rephrase it into exam-answer wording: for an option " +
+    "letter, also state what that option says. Do not contradict it, drop parts of it, or add facts it does not " +
+    "need. For a question with an OR alternative, answer each alternative and label them. Only work out the " +
+    "answer yourself for a question with no correctAnswer given. Do not include mark tags such as [1] or [½]. " +
+    "Return ONLY valid JSON.";
 
   const questionLines = paper.sections
     .flatMap((s) => s.questions.map((q, i) => ({ section: s.section, questionIndex: i, text: q.text, marks: q.marks, correctAnswer: q.correctAnswer })))
@@ -37,12 +47,13 @@ export async function generateAnswerKey(
     `Write answers for each question below.\n${questionLines}\n\n` +
     `Return JSON: {"entries": [{"section": string, "questionIndex": number, "answer": string}]}, one entry per question above.`;
 
+  const questionCount = paper.sections.reduce((n, s) => n + s.questions.length, 0);
   const result = await generateChatCompletion(
     [
       { role: "system", content: system },
       { role: "user", content: user },
     ],
-    3000,
+    answerKeyMaxTokens(questionCount),
     env,
     { llmProvider: config.llmProvider, llmModelSlug: config.questionPaperModelSlug }
   );
