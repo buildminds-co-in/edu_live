@@ -104,9 +104,9 @@ export async function enrichPdfToMarkdown(
         ],
       }),
       // A hung upstream call would otherwise hold the synchronous /ingest
-      // request open indefinitely - 60s is generous for a whole-PDF vision
-      // call but still bounded.
-      signal: AbortSignal.timeout(60_000),
+      // request open indefinitely. 180s covers a whole-PDF vision call for
+      // multi-page papers (60s was cutting them off in prod) but is still bounded.
+      signal: AbortSignal.timeout(180_000),
     });
 
     if (!response.ok) {
