@@ -1,12 +1,38 @@
 {
+  // Environments: see docs/ENVIRONMENTS.md. Always pass --env explicitly.
+  //   npx wrangler deploy --env staging
+  //   npx wrangler deploy --env production
+  // The top level is a personal dev name with no account_id, so a bare deploy
+  // cannot reach the buildminds account.
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "edu-live-frontend",
-  "account_id": "665961d811029d3117ce11b8053eea18",
+  "name": "edu-live-frontend-dev",
   "compatibility_date": "2026-09-26",
   "observability": {
     "enabled": true
   },
   "assets": {
     "directory": "."
+  },
+  "env": {
+    "staging": {
+      "name": "edu-live-frontend-staging",
+      "account_id": "665961d811029d3117ce11b8053eea18",
+      "observability": {
+        "enabled": true
+      },
+      "assets": {
+        "directory": "."
+      }
+    },
+    "production": {
+      "name": "edu-live-frontend",
+      "account_id": "665961d811029d3117ce11b8053eea18",
+      "observability": {
+        "enabled": true
+      },
+      "assets": {
+        "directory": "."
+      }
+    }
   }
 }

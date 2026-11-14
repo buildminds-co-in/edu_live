@@ -1,7 +1,9 @@
 (function () {
   "use strict";
 
-  var CHAT_URL = "https://frontend.naveed-ks.workers.dev/?embed=true";
+  // Chat iframe = the index.html this widget script was served from, so the
+  // widget always talks to the same environment as its own host.
+  var CHAT_URL = new URL("./?embed=true", document.currentScript ? document.currentScript.src : window.location.href).href;
   var DEFAULT_WIDTH = 400;
   var MIN_WIDTH = 300;
   var STORAGE_KEY = "edukripa-widget";
