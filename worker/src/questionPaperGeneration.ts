@@ -37,7 +37,8 @@ export class GenerationError extends Error {}
 // its own answer key, commonly 6-10k chars once enriched) fits in full
 // rather than being evenly sampled down - sampling would otherwise risk
 // separating a question from its own answer, which live on different pages.
-const MAX_CHUNK_CHARS_PER_CHAPTER = 10000;
+// Raised to 30k so a full answer key fits alongside its questions in one chapter.
+const MAX_CHUNK_CHARS_PER_CHAPTER = 30000;
 // Smallest useful excerpt per sampled chunk - below this, an excerpt is too
 // short to set a question from, so fewer (evenly spaced) chunks are sampled.
 const MIN_EXCERPT_CHARS = 400;
@@ -103,14 +104,17 @@ export function buildGenerationPrompt(
     "Follow the exact slot list given. Stay within standard NCERT/CBSE/ICSE class 10 syllabus " +
     "conventions. Prefer the provided source text; where it's thin, use your own syllabus " +
     "knowledge rather than inventing facts. " +
-    "If the source text is itself already a ready-made question paper (a numbered list of questions, " +
-    "often followed by its own 'Answers' section with the correct solutions), those questions and answers " +
-    "are pre-verified exam content - for any slot whose type and marks match one of them, copy that " +
-    "question's wording and its given answer verbatim rather than writing a new question or working out " +
-    "the answer yourself. Only compose an original question for a slot when no matching pre-existing " +
-    "question is left to reuse (e.g. the slot asks for a type, like assertion_reason, that the source " +
-    "doesn't contain). Return ONLY valid JSON matching the schema described, with no markdown fences and " +
-    "no commentary.";
+    "The source material may include ready-made question papers (a numbered list of questions) and their " +
+    "answer keys. These are often in separate documents: the questions in one source, the answers in another. " +
+    "Those questions and answers are pre-verified exam content. For any slot whose type and marks match a " +
+    "pre-existing question, copy that question's wording verbatim rather than writing a new one. " +
+    "Find its answer in any source provided, matching by the question's wording (question numbers may differ " +
+    "between documents, and two papers can share a subject without being the same test). Copy an answer only " +
+    "when its question matches. If no matching answer appears in any source, work the answer out from syllabus " +
+    "knowledge and do not describe it as official. Only compose an original question for a slot when no " +
+    "matching pre-existing question is left to reuse (e.g. the slot asks for a type, like assertion_reason, " +
+    "that the source doesn't contain). Return ONLY valid JSON matching the schema described, with no markdown " +
+    "fences and no commentary.";
 
   const slotLines = chapterSlotsInOrder(chaptersWithSlots)
     .map(

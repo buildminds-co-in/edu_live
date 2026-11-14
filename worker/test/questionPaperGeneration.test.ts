@@ -336,18 +336,18 @@ describe("prompt chapter coverage", () => {
   });
 
   it("samples chunks evenly across the whole chapter within the character budget", () => {
-    const chunks = Array.from({ length: 50 }, (_, i) => ({
+    const chunks = Array.from({ length: 150 }, (_, i) => ({
       chunkId: i,
       page: i,
       text: `CHUNK-${i} ` + "x".repeat(500),
       pageImageKey: null,
     }));
-    const sampled = sampleChunkText({ filename: "big.pdf", chunkCount: 50, chunks });
+    const sampled = sampleChunkText({ filename: "big.pdf", chunkCount: 150, chunks });
 
-    expect(sampled.length).toBeLessThanOrEqual(10000);
+    expect(sampled.length).toBeLessThanOrEqual(30000);
     expect(sampled).toContain("CHUNK-0 ");
-    expect(sampled).toContain("CHUNK-49 ");
-    expect(sampled).toMatch(/CHUNK-2\d /);
+    expect(sampled).toContain("CHUNK-149 ");
+    expect(sampled).toMatch(/CHUNK-(6|7|8)\d /);
   });
 
   it("returns the full text unchanged when it fits the budget", () => {
