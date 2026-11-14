@@ -158,7 +158,7 @@ function renderChapterCheckboxes() {
     chapters
       .map(
         (c) =>
-          `<label><input type="checkbox" value="${escapeHtml(c.filename)}" /> ${escapeHtml(c.chapter)}</label>`
+          `<label><input type="checkbox" value="${escapeHtml(c.filename)}" /> ${escapeHtml(c.chapter || c.filename)}</label>`
       )
       .join("");
 }
