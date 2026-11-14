@@ -31,9 +31,16 @@ npx wrangler dev --persist-to=.wrangler/state   # local dev — cannot emulate V
                                                  # Workers AI, or Browser Rendering; all
                                                  # three hit the real free-tier services
                                                  # even in local dev
-npx wrangler deploy                             # deploy the worker
-npx wrangler tail --format pretty               # stream live production logs
+npm run deploy:staging                          # deploy to staging (shared staging account)
+npm run deploy:prod                             # deploy to prod (buildminds). Bare `wrangler deploy`
+                                                 # goes to your personal dev name, never prod.
+npx wrangler tail --env production --format pretty   # stream live production logs
+npm run db:check                                # migrations must be additive (no DROP/RENAME)
+npm run db:migrate:staging | db:migrate:prod    # apply migrations BEFORE deploying code
+npm run db:backup:prod                          # Time Travel restore point before a prod migration
+npm run eval -- --worker-url=<staging URL>      # golden evals run against staging only
 
+# Secrets are set per environment: add `--env staging` or `--env production`.
 npx wrangler secret put OPENROUTER_API_KEY   # chat generation (default provider) + JEV + PDF enrichment
 npx wrangler secret put ADMIN_API_KEY        # protects /admin/*
 npx wrangler secret put INGEST_API_KEY       # protects /ingest (optional)
@@ -44,8 +51,9 @@ From `frontend/`:
 ```bash
 npx serve .          # local static serving; app.js's WORKER_URL const must point at
                       # a reachable worker (local wrangler dev or deployed)
-npx wrangler deploy   # deploy the frontend (deploys BOTH index.html and dashboard.html —
-                      # there's only one frontend wrangler.jsonc/deploy target)
+npx wrangler deploy --env staging      # deploy the frontend to staging
+npx wrangler deploy --env production   # deploy the frontend to prod (BOTH index.html and dashboard.html)
+# Environments, data rules, and the migration order: docs/ENVIRONMENTS.md
 ```
 
 **There are two separate deploy targets** (`worker/` and `frontend/`) and no CI/CD — a change to worker code needs `npx wrangler deploy` from `worker/`, a frontend change needs it from `frontend/`. Neither auto-deploys on merge to `main`.
@@ -133,7 +141,7 @@ Most stages fail open (degrade gracefully): reranker → cosine order, JEV → u
 
 Vitest, mocked `Env` bindings (`AI`, `VECTORIZE`, `PDF_BUCKET`, `EDU_LIVE_DB`, `BROWSER` all stubbed per-test). `worker/test/*.test.ts` mirrors `worker/src/*.ts` one-to-one. Fail-open/fail-closed contracts are the thing most worth testing explicitly when touching any pipeline stage — every stage above has a test asserting its specific failure behavior, not just its happy path.
 
-**Manual eval harness** (`worker/evals/`, `npm run eval`, never CI-triggered) — a separate golden-set regression suite that runs real HTTP calls against a deployed worker, for before/after comparisons around a model swap, prompt rewrite, or retrieval change. `golden-cases.json` cases carry a `mode`: `"chat"`, `"explain"`, or `"questionPaper"`, each dispatched to its own `run*Case()` function in `run-evals.js`. Grading is an LLM judge by default (`google/gemini-2.5-flash` — deliberately a different model than whatever's under test, so it isn't grading its own homework); it checks each case's `keyFacts` are conveyed *in meaning* against the generated output, paraphrase/extra-detail tolerant, only failing on a missing/contradicted/wrong fact. **The judge never reads the source PDFs or retrieved chunks** — it only sees the hand-authored `keyFacts` list and the generated answer, so it's a closed-book check against facts a human verified ahead of time, not an automated groundedness/hallucination check. `--no-judge` falls back to a cheap literal `cheapKeywords` substring check for a zero-LLM-call sanity pass. Per-mode grounding expectations differ and the harness's `keyFacts` should reflect them: `chat` is strictly grounded (no answer style permits adding outside facts, see Chat section above); `explain` depends on the live `explainRetrievalMode` (strict under `rag_fallback`-with-context, more lenient under the default `rag_plus_llm`); `questionPaper` deliberately allows syllabus-knowledge fill-in where source text is thin. `explain` cases always reflect whatever model is live in production config — `/explain` has no `modelOverride` support, unlike `/chat` and `/question-paper/generate`.
+**Manual eval harness** (`worker/evals/`, `npm run eval`, never CI-triggered) — a separate golden-set regression suite that runs real HTTP calls against a deployed worker, for before/after comparisons around a model swap, prompt rewrite, or retrieval change. `golden-cases.json` cases carry a `mode`: `"chat"`, `"explain"`, or `"questionPaper"`, each dispatched to its own `run*Case()` function in `run-evals.js`. Grading is an LLM judge by default (`openai/gpt-4o-mini` — deliberately a different model than whatever's under test, which is `google/gemini-2.5-flash` for chat, explainer and question papers, so it isn't grading its own homework); it checks each case's `keyFacts` are conveyed *in meaning* against the generated output, paraphrase/extra-detail tolerant, only failing on a missing/contradicted/wrong fact. **The judge never reads the source PDFs or retrieved chunks** — it only sees the hand-authored `keyFacts` list and the generated answer, so it's a closed-book check against facts a human verified ahead of time, not an automated groundedness/hallucination check. `--no-judge` falls back to a cheap literal `cheapKeywords` substring check for a zero-LLM-call sanity pass. Per-mode grounding expectations differ and the harness's `keyFacts` should reflect them: `chat` is strictly grounded (no answer style permits adding outside facts, see Chat section above); `explain` depends on the live `explainRetrievalMode` (strict under `rag_fallback`-with-context, more lenient under the default `rag_plus_llm`); `questionPaper` deliberately allows syllabus-knowledge fill-in where source text is thin. `explain` cases always reflect whatever model is live in production config — `/explain` has no `modelOverride` support, unlike `/chat` and `/question-paper/generate`.
 
 ### Design history
 

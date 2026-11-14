@@ -27,3 +27,6 @@ worker/dist/
 # Cloudflare Pages (frontend)
 frontend/.wrangler/
 .wrangler/
+
+# Environment-local tooling
+worker/backups/
