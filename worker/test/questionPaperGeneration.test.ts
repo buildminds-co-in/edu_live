@@ -309,6 +309,34 @@ describe("JSON repair (parseLlmJson / parseAndValidateGeneratedPaper)", () => {
   });
 });
 
+describe("sanitizeInvalidJsonEscapes (repair path only)", () => {
+  it("repairs raw LaTeX mixed with correctly escaped LaTeX in the same reply", () => {
+    // Built by hand: one formula escaped correctly (\\sqrt), the others not (\sqrt, \frac, \theta).
+    const raw = String.raw`{"questions": [{"text": "$\\sqrt{2}$ and $\sqrt{3}$ and $\frac{1}{2}$ and $\theta$"}]}`;
+    expect(() => JSON.parse(raw)).toThrow();
+    const result = parseLlmJson(raw) as { questions: { text: string }[] };
+    expect(result.questions[0].text).toBe("$\\sqrt{2}$ and $\\sqrt{3}$ and $\\frac{1}{2}$ and $\\theta$");
+  });
+
+  it("keeps real newlines, quotes and unicode escapes", () => {
+    const raw = String.raw`{"t": "line one\nline two \"quoted\" é \Omega"}`;
+    const result = parseLlmJson(raw) as { t: string };
+    expect(result.t).toBe('line one\nline two "quoted" é \\Omega');
+  });
+
+  it("leaves JSON that already parses untouched", () => {
+    const valid = JSON.stringify({ t: "$\\frac{1}{2}$" });
+    expect(parseLlmJson(valid)).toEqual({ t: "$\\frac{1}{2}$" });
+  });
+});
+
+describe("buildGenerationPrompt: explicit question count", () => {
+  it("states the exact number of questions to return", () => {
+    const { user } = buildGenerationPrompt(blueprint, chaptersWithSlots);
+    expect(user).toContain(`exactly ${totalQuestionCount()} questions`);
+  });
+});
+
 describe("structure comes from the blueprint, not the LLM's echoed fields", () => {
   it("assigns section/questionType/marks from the slot at the same position", () => {
     const questions = Array.from({ length: totalQuestionCount() }, (_, i) => ({

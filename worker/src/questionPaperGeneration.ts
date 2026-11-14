@@ -64,7 +64,7 @@ const MAX_GENERATION_TOKENS = 32000;
 // Part of the question-paper cache key. Bump whenever the generation or
 // answer-key prompts change, so papers cached under the old prompts are
 // regenerated instead of being served from cache.
-export const QUESTION_PAPER_PROMPT_VERSION = "prompt-2026-11-15b";
+export const QUESTION_PAPER_PROMPT_VERSION = "prompt-2026-11-15c";
 
 export function computeGenerationMaxTokens(totalQuestions: number): number {
   return Math.min(MAX_GENERATION_TOKENS, Math.max(MIN_GENERATION_TOKENS, totalQuestions * TOKENS_PER_QUESTION));
@@ -147,6 +147,8 @@ export function buildGenerationPrompt(
     .map(({ chunks }) => `--- Source: ${chunks.filename} ---\n${sampleChunkText(chunks)}`)
     .join("\n\n");
 
+  const totalSlotQuestions = chaptersWithSlots.reduce((sum, c) => sum + c.slots.reduce((n, s) => n + s.count, 0), 0);
+
   const user =
     `Blueprint slots (fill exactly this many questions per slot, in order; draw each slot's questions from ` +
     `the source text of the chapter named on its line):\n${slotLines}\n\n` +
@@ -171,7 +173,9 @@ export function buildGenerationPrompt(
     `points and values), not a re-derived one.\n\n` +
     `Return JSON: {"questions": [{"section": string, "questionType": string, "marks": number, "text": string, ` +
     `"correctAnswer": string, "latex"?: string, "table"?: {"headers": string[], "rows": string[][]}}]}. The questions ` +
-    `array must contain exactly the total count across all slots, in the same order as the slot list.`;
+    `array must contain exactly ${totalSlotQuestions} questions (the total count across all slots), in the same order ` +
+    `as the slot list - if there aren't enough questions to reuse, write original ones rather than returning fewer. ` +
+    `Inside JSON strings, escape every backslash in LaTeX as \\\\ (for example "\\\\frac{1}{2}").`;
 
   return { system, user };
 }
@@ -194,8 +198,26 @@ interface RawQuestion {
 // followed by a legal JSON escape char turns that stray "\O" into a literal
 // "\O" in the parsed string (harmless - at worst a slightly odd-looking
 // character sequence) instead of a hard parse failure.
-function sanitizeInvalidJsonEscapes(text: string): string {
-  return text.replace(/\\(?!["\\/bfnrtu])/g, "\\\\");
+/**
+ * Only used after a plain JSON.parse has failed. Reads escapes as pairs, left
+ * to right, so an already-escaped "\\sqrt" stays intact while a raw LaTeX
+ * "\sqrt" in the same reply is repaired (the old per-backslash regex turned
+ * "\\sqrt" into an invalid "\\\sqrt", so a reply mixing both never parsed).
+ * Also repairs "\u" not followed by 4 hex digits, and treats \f \b \t \r
+ * directly followed by a letter as LaTeX (\frac, \beta, \theta, \rho), since a
+ * model never means a form feed or tab there. "\n" is left alone: it is far
+ * more often a real newline than \nabla or \neq.
+ */
+export function sanitizeInvalidJsonEscapes(text: string): string {
+  return text.replace(/\\(u[0-9a-fA-F]{4}|[\s\S])/g, (match, escaped: string, offset: number) => {
+    if (escaped.length === 5) return match; // valid \uXXXX
+    if ('"\\/n'.includes(escaped)) return match; // valid escapes, kept as-is
+    if ("fbtr".includes(escaped)) {
+      // \frac, \beta, \theta, \rho -> LaTeX; otherwise a real escape
+      return /[A-Za-z]/.test(text.charAt(offset + 2)) ? "\\\\" + escaped : match;
+    }
+    return "\\\\" + escaped; // invalid escape, including \u without 4 hex digits
+  });
 }
 
 /**
