@@ -394,3 +394,27 @@ describe("QUESTION_PAPER_PROMPT_VERSION", () => {
     expect(QUESTION_PAPER_PROMPT_VERSION).toMatch(/^prompt-/);
   });
 });
+
+describe("usableCorrectAnswer", () => {
+  it("keeps a single option letter for mcq and assertion_reason, with or without brackets or an explanation", async () => {
+    const { usableCorrectAnswer } = await import("../src/questionPaperGeneration");
+    expect(usableCorrectAnswer("mcq", "(B)")).toEqual({ correctAnswer: "(B)" });
+    expect(usableCorrectAnswer("mcq", "C")).toEqual({ correctAnswer: "C" });
+    expect(usableCorrectAnswer("assertion_reason", "(D) A is false but R is true")).toEqual({ correctAnswer: "(D) A is false but R is true" });
+  });
+
+  it("drops placeholders and non-letter answers for option questions, so the answer key works them out", async () => {
+    const { usableCorrectAnswer } = await import("../src/questionPaperGeneration");
+    expect(usableCorrectAnswer("mcq", "---")).toEqual({});
+    expect(usableCorrectAnswer("mcq", "–")).toEqual({});
+    expect(usableCorrectAnswer("mcq", "No option is correct as printed")).toEqual({});
+    expect(usableCorrectAnswer("assertion_reason", "")).toEqual({});
+    expect(usableCorrectAnswer("mcq", 3)).toEqual({});
+  });
+
+  it("keeps written answers but still drops pure placeholders for them", async () => {
+    const { usableCorrectAnswer } = await import("../src/questionPaperGeneration");
+    expect(usableCorrectAnswer("short_answer", "Spinal cord.")).toEqual({ correctAnswer: "Spinal cord." });
+    expect(usableCorrectAnswer("long_answer", "  ---  ")).toEqual({});
+  });
+});

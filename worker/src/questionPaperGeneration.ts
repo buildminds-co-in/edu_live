@@ -64,7 +64,7 @@ const MAX_GENERATION_TOKENS = 32000;
 // Part of the question-paper cache key. Bump whenever the generation or
 // answer-key prompts change, so papers cached under the old prompts are
 // regenerated instead of being served from cache.
-export const QUESTION_PAPER_PROMPT_VERSION = "prompt-2026-11-15";
+export const QUESTION_PAPER_PROMPT_VERSION = "prompt-2026-11-15b";
 
 export function computeGenerationMaxTokens(totalQuestions: number): number {
   return Math.min(MAX_GENERATION_TOKENS, Math.max(MIN_GENERATION_TOKENS, totalQuestions * TOKENS_PER_QUESTION));
@@ -121,14 +121,18 @@ export function buildGenerationPrompt(
     "alternative) rather than writing a new one. A slot whose chapter is an answer key may reuse questions from " +
     "the question paper that key belongs to, if that paper is provided. Never use the same question twice. Do not " +
     "reuse a question that an answer key or its notes mark as flawed, as having no correct option, or as having " +
-    "an unclear diagram. Never turn answer-key text, marking instructions or tutor notes into questions; if a " +
+    "an unclear diagram, or whose official answer is not a single clear answer (for example '-' or a note). If you " +
+    "change anything in a reused question - wording, numbers, options, scenario or question type - it is no longer " +
+    "the official question: treat it as an original question. Never turn answer-key text, marking instructions or tutor notes into questions; if a " +
     "chapter's only source is an answer key and its paper is not provided, write new questions whose answers are " +
     "in that key. Only compose an original question for a slot when no matching pre-existing question is left to " +
     "reuse (e.g. the slot asks for a type, like assertion_reason, that the source doesn't contain).\n\n" +
-    "Answers: for a reused question, take its answer from the answer key of the same paper, matching by question " +
-    "number and checking that the answer fits the question's topic. Never take an answer from a key that belongs " +
-    "to a different paper, even when the question number is the same. If no matching answer is provided, or it " +
-    "does not fit the question, work the answer out from the source text or syllabus knowledge. Leave out mark " +
+    "Answers: for a reused question copied unchanged, take its answer from the answer key of the same paper, " +
+    "matching by question number and checking that the answer fits the question's topic. Never take an answer from " +
+    "a key that belongs to a different paper, even when the question number is the same. Never copy an official " +
+    "answer onto a question you changed or wrote yourself: work out the correct answer for the question exactly as " +
+    "you wrote it. If no matching answer is provided, or it does not fit the question, work the answer out from the " +
+    "source text or syllabus knowledge. Leave out mark " +
     "tags such as [1], [½] or \"(2 marks)\" from question and answer text; marks belong only in the marks field.\n\n" +
     "Return ONLY valid JSON matching the schema described, with no markdown fences and no commentary.";
 
@@ -157,7 +161,9 @@ export function buildGenerationPrompt(
     `formatted "(A) ...", "(B) ...", "(C) ...", "(D) ...". For questionType "assertion_reason": "text" must state ` +
     `"Assertion (A): ..." then "Reason (R): ...", followed by the four standard CBSE options (A)-(D) for how the ` +
     `assertion and reason relate. For every question of every type, also return "correctAnswer". For ` +
-    `mcq/assertion_reason: the correct option letter, e.g. "(B)". For short_answer/long_answer/case_based: the ` +
+    `mcq/assertion_reason: exactly one option letter, e.g. "(B)", that is correct for the options as you wrote them ` +
+    `(for assertion_reason, decide from whether A and R are each true and whether R explains A) - never "---", a ` +
+    `blank, or a note. For short_answer/long_answer/case_based: the ` +
     `answer's key points, values and steps (several sentences is fine for higher marks), without mark tags; for a ` +
     `question with an OR alternative, answer each alternative and label them. The answer must come from the source ` +
     `material or standard syllabus knowledge, never omitted and never invented without basis. If the answer key of ` +
@@ -287,10 +293,29 @@ function parseEntries(raw: string, orderedSlots: BlueprintSlot[]): ParsedEntry[]
       text: typeof q?.text === "string" ? q.text : String(q?.text ?? ""),
       ...(typeof q?.latex === "string" && q.latex ? { latex: q.latex } : {}),
       ...(isValidTable(q?.table) ? { table: q.table } : {}),
-      ...(typeof q?.correctAnswer === "string" && q.correctAnswer ? { correctAnswer: q.correctAnswer } : {}),
+      ...usableCorrectAnswer(slot.questionType, q?.correctAnswer),
     };
     return { question, wantsDiagram: slot.wantsDiagram === true };
   });
+}
+
+/**
+ * Drops a correctAnswer the answer-key step can't use, so that step works the
+ * answer out itself instead of passing a placeholder through. Seen in
+ * practice: "---" copied from an answer key that marks a question as flawed.
+ * Multiple-choice and assertion-reason answers must start with one option
+ * letter; any answer that is only dashes or blank is dropped for every type.
+ */
+export function usableCorrectAnswer(questionType: string, value: unknown): { correctAnswer?: string } {
+  if (typeof value !== "string") return {};
+  const answer = value.trim();
+  if (!answer || /^[-–—_.\s]*$/.test(answer)) return {};
+  const needsLetter = questionType === "mcq" || questionType === "assertion_reason";
+  if (needsLetter && !/^\(?[A-Da-d]\)?(?=$|[\s.,:;)-])/.test(answer)) {
+    console.warn(`question paper generation: dropping unusable ${questionType} correctAnswer ${JSON.stringify(answer.slice(0, 40))}`);
+    return {};
+  }
+  return { correctAnswer: value };
 }
 
 function groupIntoPaper(entries: ParsedEntry[], blueprint: Blueprint): GeneratedPaper {
