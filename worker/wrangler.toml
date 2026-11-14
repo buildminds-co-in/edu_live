@@ -33,7 +33,7 @@ bucket_name = "edu-live-pdfs-dev"
 [[d1_databases]]
 binding = "EDU_LIVE_DB"
 database_name = "edu-live-db-dev"
-database_id = "REPLACE_WITH_YOUR_DEV_D1_ID"
+database_id = "local-dev-only"
 
 [vars]
 GUARDRAIL_ENABLED = "true"
