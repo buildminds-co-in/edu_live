@@ -1,4 +1,5 @@
-const WORKER_URL = "https://edu-live-worker.buildminds-co-in.workers.dev";
+// Set by env.js from the page's hostname (local / staging / production).
+const WORKER_URL = window.EDU_ENV.workerUrl;
 
 if (new URLSearchParams(window.location.search).has("embed")) {
   document.documentElement.classList.add("embed-mode");

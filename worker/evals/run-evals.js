@@ -25,10 +25,12 @@
 // --feature-changed Free-text label stored in the report, e.g.
 //                   --feature-changed="switched chat model to X". Lets you
 //                   grep report history for what caused a result to change.
-// --worker-url      Defaults to the deployed production worker.
+// --worker-url      Required (or set EVAL_WORKER_URL): the STAGING worker URL.
+//                   Production is refused unless --allow-prod is also passed.
 // --admin-key       Falls back to ADMIN_API_KEY from the environment or
 //                   worker/.dev.vars.
 // --out-dir         Defaults to evals/results/ (gitignored).
+// --case=id1,id2    Run only the listed case ids from golden-cases.json.
 //
 // Case modes (golden-cases.json "mode" field): "chat" (/chat, answerStyle=auto -
 // strictly grounded, no model override support issue here since /chat honors
@@ -47,8 +49,10 @@ const path = require("path");
 // documented in llm.ts: a model shouldn't grade its own homework. Already
 // proven reachable via OpenRouter elsewhere in this codebase (ingestion
 // enrichment uses the same slug).
-const JUDGE_MODEL_DEFAULT = "google/gemini-2.5-flash";
-const DEFAULT_WORKER_URL = "https://edu-live-worker.buildminds-co-in.workers.dev";
+const JUDGE_MODEL_DEFAULT = "openai/gpt-4o-mini";
+// Evals run against STAGING. The golden PDFs live there, and the production
+// worker is only reachable with an explicit --allow-prod (see docs/ENVIRONMENTS.md).
+const PROD_WORKER_URL = "https://edu-live-worker.buildminds-co-in.workers.dev";
 
 function parseArgs(argv) {
   const args = {};
@@ -230,7 +234,15 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const devVars = loadDevVars();
 
-  const workerUrl = (args["worker-url"] || DEFAULT_WORKER_URL).replace(/\/$/, "");
+  const workerUrl = (args["worker-url"] || process.env.EVAL_WORKER_URL || "").replace(/\/$/, "");
+  if (!workerUrl) {
+    console.error("No worker URL. Pass --worker-url=<staging worker URL> or set EVAL_WORKER_URL.");
+    process.exit(1);
+  }
+  if (workerUrl === PROD_WORKER_URL && !args["allow-prod"]) {
+    console.error("Refusing to run evals against production. Use the staging worker, or pass --allow-prod deliberately.");
+    process.exit(1);
+  }
   const adminKey = args["admin-key"] || process.env.ADMIN_API_KEY || devVars.ADMIN_API_KEY || "";
   const openrouterKey = process.env.OPENROUTER_API_KEY || devVars.OPENROUTER_API_KEY || "";
   const judgeModel = args["judge-model"] || JUDGE_MODEL_DEFAULT;
@@ -259,6 +271,16 @@ async function main() {
   }
 
   const golden = JSON.parse(fs.readFileSync(path.join(__dirname, "golden-cases.json"), "utf8"));
+  // --case=id1,id2 runs only those cases (ids as in golden-cases.json).
+  if (typeof args.case === "string") {
+    const wanted = new Set(args.case.split(",").map((s) => s.trim()).filter(Boolean));
+    golden.cases = golden.cases.filter((c) => wanted.has(c.id));
+    const missingIds = [...wanted].filter((id) => !golden.cases.some((c) => c.id === id));
+    if (missingIds.length) {
+      console.error(`Unknown case id(s): ${missingIds.join(", ")}`);
+      process.exit(1);
+    }
+  }
   const results = [];
 
   console.log(`Running ${golden.cases.length} eval case(s) against ${workerUrl}`);

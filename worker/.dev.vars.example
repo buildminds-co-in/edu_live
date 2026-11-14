@@ -1,0 +1,6 @@
+# Copy to worker/.dev.vars (gitignored) for LOCAL DEV ONLY.
+# Local dev runs on your own Cloudflare account. Never paste prod or staging keys here.
+OPENROUTER_API_KEY=your_own_openrouter_key
+# Dev/staging admin and ingest keys stay "<ADMIN_KEY>" until the key follow-up.
+ADMIN_API_KEY=<ADMIN_KEY>
+INGEST_API_KEY=<ADMIN_KEY>

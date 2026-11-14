@@ -1,29 +1,107 @@
-name = "edu-live-worker"
+# Three environments. Full rules: docs/ENVIRONMENTS.md
+#
+#   (top level)          local dev  -> `npm run dev`. Runs on YOUR OWN Cloudflare account.
+#   --env staging        staging    -> shared staging account. Eval PDFs live here.
+#   --env production     prod       -> buildminds account. Always pass --env production.
+#
+# Wrangler does NOT inherit bindings or vars into [env.*] blocks, so every block
+# below repeats its own bindings. No account_id at the top level on purpose: a
+# bare `wrangler deploy` can never reach the buildminds account.
+#
+# REPLACE_WITH_* placeholders must be filled in before the staging deploy works.
+
+name = "edu-live-worker-dev"
 main = "src/index.ts"
-account_id = "665961d811029d3117ce11b8053eea18"
 compatibility_date = "2026-09-28"
 compatibility_flags = ["nodejs_compat"]
 
 [ai]
 binding = "AI"
 
+[browser]
+binding = "BROWSER"
+
 [[vectorize]]
 binding = "VECTORIZE"
-index_name = "edu-live-chunks"
+index_name = "edu-live-chunks-dev"
 remote = true
 
 [[r2_buckets]]
 binding = "PDF_BUCKET"
-bucket_name = "edu-live-pdfs"
+bucket_name = "edu-live-pdfs-dev"
 
 [[d1_databases]]
+binding = "EDU_LIVE_DB"
+database_name = "edu-live-db-dev"
+database_id = "local-dev-only"
+
+[vars]
+GUARDRAIL_ENABLED = "true"
+JEV_ENABLED = "true"
+
+# ---------------------------------------------------------------------------
+# Staging: currently in the buildminds account (same account as prod, by request).
+# Resource names differ from prod, so staging and prod never share a resource.
+# ---------------------------------------------------------------------------
+[env.staging]
+name = "edu-live-worker-staging"
+account_id = "665961d811029d3117ce11b8053eea18"
+main = "src/index.ts"
+compatibility_date = "2026-09-28"
+compatibility_flags = ["nodejs_compat"]
+
+[env.staging.ai]
+binding = "AI"
+
+[env.staging.browser]
+binding = "BROWSER"
+
+[[env.staging.vectorize]]
+binding = "VECTORIZE"
+index_name = "edu-live-chunks-staging"
+
+[[env.staging.r2_buckets]]
+binding = "PDF_BUCKET"
+bucket_name = "edu-live-pdfs-staging"
+
+[[env.staging.d1_databases]]
+binding = "EDU_LIVE_DB"
+database_name = "edu-live-db-staging"
+database_id = "9d1bf67b-9844-4df9-a66f-68f1b473ff25"
+
+[env.staging.vars]
+GUARDRAIL_ENABLED = "true"
+JEV_ENABLED = "true"
+
+# ---------------------------------------------------------------------------
+# Production: buildminds account, buildminds.co.in. Real student data lives here.
+# ---------------------------------------------------------------------------
+[env.production]
+name = "edu-live-worker"
+account_id = "665961d811029d3117ce11b8053eea18"
+main = "src/index.ts"
+compatibility_date = "2026-09-28"
+compatibility_flags = ["nodejs_compat"]
+
+[env.production.ai]
+binding = "AI"
+
+[env.production.browser]
+binding = "BROWSER"
+
+[[env.production.vectorize]]
+binding = "VECTORIZE"
+index_name = "edu-live-chunks"
+
+[[env.production.r2_buckets]]
+binding = "PDF_BUCKET"
+bucket_name = "edu-live-pdfs"
+
+[[env.production.d1_databases]]
 binding = "EDU_LIVE_DB"
 database_name = "edu-live-db"
 database_id = "f12708d6-047e-4a0a-a929-24ae19dc298d"
 
-[browser]
-binding = "BROWSER"
-
-[vars]
+[env.production.vars]
 GUARDRAIL_ENABLED = "true"
 JEV_ENABLED = "true"
