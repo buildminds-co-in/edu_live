@@ -3,6 +3,7 @@ import type { Blueprint, BlueprintSlot } from "./questionPaperBlueprints";
 import type { ChapterChunks } from "./questionPaperRetrieval";
 import { generateChatCompletion } from "./llm";
 import { generateDiagramImage, isDiagramAllowlisted } from "./questionPaperImageGen";
+import { recordUsage } from "./transactionLog";
 
 export interface GeneratedQuestion {
   section: string;
@@ -450,6 +451,17 @@ export async function generatePaper(
     { llmProvider: config.llmProvider, llmModelSlug: config.questionPaperModelSlug },
     { jsonMode: true }
   );
+  await recordUsage(env, {
+    pathTaken: "question_paper",
+    description: `${blueprint.subject} ${blueprint.marksTotal} marks, ${totalQuestions} questions: ${chaptersWithSlots.map((c) => c.chunks.filename).join(", ")}`,
+    provider: result.provider,
+    model: result.model,
+    inputTokens: result.inputTokens,
+    outputTokens: result.outputTokens,
+    costUsd: result.costUsd,
+    inputSummary: `Blueprint ${blueprint.version}, ${chaptersWithSlots.length} source document(s), prompt ${system.length + user.length} characters`,
+    outputSummary: result.text,
+  });
 
   const entries = parseEntries(result.text, orderedSlots);
   const paper = groupIntoPaper(entries, blueprint);

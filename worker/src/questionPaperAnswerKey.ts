@@ -1,6 +1,7 @@
 import type { Env } from "./index";
 import { GenerationError, parseLlmJson, type GeneratedPaper } from "./questionPaperGeneration";
 import { generateChatCompletion } from "./llm";
+import { recordUsage } from "./transactionLog";
 
 export interface AnswerKeyEntry {
   section: string;
@@ -62,6 +63,17 @@ export async function generateAnswerKey(
       { llmProvider: config.llmProvider, llmModelSlug: config.questionPaperModelSlug },
       { jsonSchema: { name: "answer_key", schema: answerKeySchema(questionCount) } }
     );
+    await recordUsage(env, {
+      pathTaken: "answer_key",
+      description: `Answer key: ${paper.subject} ${paper.marksTotal} marks, ${questionCount} questions`,
+      provider: result.provider,
+      model: result.model,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+      costUsd: result.costUsd,
+      inputSummary: `${questionCount} questions with their correctAnswer`,
+      outputSummary: result.text,
+    });
     return validateAnswerKey(parseLlmJson(result.text));
   };
 

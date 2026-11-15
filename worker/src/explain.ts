@@ -2,7 +2,8 @@ import type { Env } from "./index";
 import { checkQueryInScopeAndAgeAppropriate } from "./guardrailCheck";
 import { rerank, workersAiScoreFn, type RetrievedChunk } from "./rerank";
 import { scoreChunksWithJev, filterJevScored, JEV_MODEL_ID, type JevScoredChunk } from "./jev";
-import { buildTransactionTrace, type TransactionTrace } from "./transactionTrace";
+import { buildTransactionTrace } from "./transactionTrace";
+import { recordTransaction } from "./transactionLog";
 import { getRuntimeConfig } from "./config";
 import { generateChatCompletion } from "./llm";
 
@@ -168,39 +169,6 @@ function parseExplainLlmResponse(rawText: string, concept: string): ParsedLlmExp
   };
 }
 
-async function recordExplainTransaction(env: Env, trace: TransactionTrace): Promise<void> {
-  try {
-    await env.EDU_LIVE_DB.prepare(
-      `INSERT INTO transactions
-        (timestamp, question, provider, model, path_taken, confidence, retrieval_json,
-         llm_input, llm_output, jev_input_json, jev_output_json, input_tokens, output_tokens,
-         jev_cost_usd, llm_cost_usd, jev_model)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-      .bind(
-        trace.timestamp,
-        trace.question,
-        trace.provider,
-        trace.model,
-        trace.pathTaken,
-        trace.confidence,
-        JSON.stringify(trace.retrieval),
-        trace.llmInput,
-        trace.llmOutput,
-        trace.jevInput ? JSON.stringify(trace.jevInput) : null,
-        trace.jevOutput ? JSON.stringify(trace.jevOutput) : null,
-        trace.inputTokens,
-        trace.outputTokens,
-        trace.jevCostUsd,
-        trace.llmCostUsd,
-        trace.jevModel
-      )
-      .run();
-  } catch (err) {
-    console.error("failed to record explain transaction trace", err);
-  }
-}
-
 export async function handleExplain(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const body = (await request.json().catch(() => null)) as { concept?: unknown } | null;
   const concept = typeof body?.concept === "string" ? body.concept.trim() : undefined;
@@ -326,7 +294,7 @@ export async function handleExplain(request: Request, env: Env, ctx: ExecutionCo
       outputTokens: generateResult.outputTokens,
       llmCostUsd: generateResult.costUsd,
     });
-    ctx.waitUntil(recordExplainTransaction(env, trace));
+    ctx.waitUntil(recordTransaction(env, { ...trace, groundedIn, retrievalMode: config.explainRetrievalMode }));
 
     const responseBody: ExplainResponseBody = {
       concept: parsed.concept,

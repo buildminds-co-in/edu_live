@@ -1,6 +1,19 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { handleChat } from "../src/chat";
 import type { Env } from "../src/index";
+
+// With no retrieved chunks, chat falls back to a live DuckDuckGo search. Tests
+// that don't stub it themselves were hitting the real network and timing out
+// when it was slow, so every test gets an empty search result by default.
+// Tests that replace globalThis.fetch themselves still do so as before.
+const realFetch = globalThis.fetch;
+beforeEach(() => {
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) =>
+    String(input).includes("duckduckgo") ? new Response("<html></html>", { status: 200 }) : realFetch(input, init);
+});
+afterEach(() => {
+  globalThis.fetch = realFetch;
+});
 
 function makeRequest(body: unknown): Request {
   return new Request("https://worker.example/chat", {

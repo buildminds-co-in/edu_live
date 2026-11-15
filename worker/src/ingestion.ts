@@ -93,7 +93,7 @@ export async function handleIngest(request: Request, env: Env): Promise<Response
   // the R2 customMetadata.enriched flag surfaced in /admin/documents.
   let enrichmentApplied = false;
   if (config.ingestionEnrichmentEnabled) {
-    const enrichedPages = await enrichPdfToMarkdown(pdfBytes, pages, env, config);
+    const enrichedPages = await enrichPdfToMarkdown(pdfBytes, pages, env, config, file.name);
     enrichmentApplied = enrichedPages !== pages;
     pages = enrichedPages;
   }

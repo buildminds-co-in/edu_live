@@ -1,5 +1,6 @@
 import type { Env } from "./index";
 import type { PageText } from "./types";
+import { recordUsage } from "./transactionLog";
 
 // PDF-capable OpenRouter model - separate from the chat llmModelSlug since
 // document understanding and chat generation have different model
@@ -180,16 +181,17 @@ export async function enrichPdfToMarkdown(
   pdfBytes: ArrayBuffer,
   fallbackPages: PageText[],
   env: Env,
-  config: { ingestionModelSlug: string }
+  config: { ingestionModelSlug: string },
+  label = "document.pdf"
 ): Promise<PageText[]> {
   const started = Date.now();
-  const first = await enrichOnce(pdfBytes, fallbackPages, env, config, FIRST_ATTEMPT_TIMEOUT_MS);
+  const first = await enrichOnce(pdfBytes, fallbackPages, env, config, FIRST_ATTEMPT_TIMEOUT_MS, label);
   const firstCount = countEnrichedPages(first, fallbackPages);
   if (firstCount * 2 >= fallbackPages.length || Date.now() - started > RETRY_ONLY_IF_FIRST_UNDER_MS) {
     return first;
   }
   console.error(`ingestion enrichment covered ${firstCount}/${fallbackPages.length} pages, retrying once`);
-  const second = await enrichOnce(pdfBytes, fallbackPages, env, config, RETRY_TIMEOUT_MS);
+  const second = await enrichOnce(pdfBytes, fallbackPages, env, config, RETRY_TIMEOUT_MS, `${label} (retry)`);
   return countEnrichedPages(second, fallbackPages) > firstCount ? second : first;
 }
 
@@ -198,7 +200,8 @@ async function enrichOnce(
   fallbackPages: PageText[],
   env: Env,
   config: { ingestionModelSlug: string },
-  timeoutMs: number
+  timeoutMs: number,
+  label: string
 ): Promise<PageText[]> {
   try {
     const base64Pdf = base64FromArrayBuffer(pdfBytes);
@@ -211,6 +214,7 @@ async function enrichOnce(
       body: JSON.stringify({
         model: config.ingestionModelSlug,
         max_tokens: enrichmentMaxTokens(fallbackPages.length),
+        usage: { include: true },
         messages: [
           {
             role: "user",
@@ -231,8 +235,24 @@ async function enrichOnce(
       return fallbackPages;
     }
 
-    const body = (await response.json()) as { choices: { message: { content: string }; finish_reason?: string }[] };
+    const body = (await response.json()) as {
+      choices: { message: { content: string }; finish_reason?: string }[];
+      usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
+    };
     const content = body.choices?.[0]?.message?.content;
+    // Every attempt is billed, including ones that come back unusable, so
+    // each is recorded for the dashboard's Costing tab.
+    await recordUsage(env, {
+      pathTaken: "ingestion_enrichment",
+      description: `Enrichment: ${label}, ${fallbackPages.length} pages`,
+      provider: "openrouter",
+      model: config.ingestionModelSlug,
+      inputTokens: body.usage?.prompt_tokens,
+      outputTokens: body.usage?.completion_tokens,
+      costUsd: body.usage?.cost,
+      inputSummary: `Whole PDF (${fallbackPages.length} pages) with the enrichment prompt`,
+      outputSummary: `finish_reason: ${body.choices?.[0]?.finish_reason ?? "unknown"}, ${content?.length ?? 0} characters`,
+    });
     if (!content) {
       console.error("ingestion enrichment returned no content, falling back to plain text");
       return fallbackPages;
