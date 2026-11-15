@@ -5,6 +5,7 @@ import { chunkVectorId } from "./vectorId";
 import { enrichPdfToMarkdown } from "./ingestionEnrichment";
 import { capturePageScreenshot, launchScreenshotBrowser } from "./pageScreenshot";
 import { getRuntimeConfig } from "./config";
+import { deleteIndexedContent } from "./documentDeletion";
 import { looksLikeGarbledStructuralFormula, sanitizeGarbledStructuralFormulas } from "./structuralFormulaDetection";
 
 const EMBEDDING_MODEL = "@cf/baai/bge-base-en-v1.5";
@@ -52,16 +53,7 @@ export async function handleIngest(request: Request, env: Env): Promise<Response
     // document whose page/chunk count shrinks would leave stale vectors and
     // page-images past the new content's range, and the old cleaned text
     // would survive even if the new ingest doesn't produce any.
-    const oldChunkCount = Number(existing.customMetadata?.chunkCount ?? 0);
-    if (oldChunkCount > 0) {
-      const oldIds = Array.from({ length: oldChunkCount }, (_, i) => chunkVectorId(file.name, i));
-      await env.VECTORIZE.deleteByIds(oldIds);
-    }
-    const oldPageImages = await env.PDF_BUCKET.list({ prefix: `page-images/${file.name}/` });
-    if (oldPageImages.objects.length > 0) {
-      await env.PDF_BUCKET.delete(oldPageImages.objects.map((o) => o.key));
-    }
-    await env.PDF_BUCKET.delete(`cleaned/${file.name}.md`);
+    await deleteIndexedContent(env, file.name, Number(existing.customMetadata?.chunkCount ?? 0));
   }
 
   const pdfBytes = await file.arrayBuffer();
