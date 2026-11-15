@@ -74,8 +74,8 @@ function uploadCardHtml() {
         </div>
       </div>
       <div class="upload-row" id="upload-chapter-row">
-        <label for="upload-chapter">Chapter</label>
-        <input type="text" id="upload-chapter" name="chapter" placeholder="e.g. Carbon and its Compounds" />
+        <label for="upload-chapter">Chapter (required)</label>
+        <input type="text" id="upload-chapter" name="chapter" placeholder="e.g. Carbon and its Compounds" required aria-required="true" />
       </div>
       <div class="upload-row">
         <input type="file" id="file-input" accept="application/pdf" />
@@ -126,6 +126,16 @@ function wireUploadCard(onUploaded) {
     const file = fileInput.files[0];
     if (!file) {
       uploadStatus.textContent = "Choose a PDF first.";
+      return;
+    }
+    // The chapter name is what appears in the question-paper chapter list, so
+    // a question-paper document can't be uploaded without one.
+    if (qpEligibleInput.checked && !chapterInput.value.trim()) {
+      uploadStatus.textContent =
+        "Enter a chapter name. It's the name shown when choosing chapters for a question paper.";
+      uploadStatus.classList.remove("upload-status-success");
+      uploadStatus.classList.add("upload-status-error");
+      chapterInput.focus();
       return;
     }
 
