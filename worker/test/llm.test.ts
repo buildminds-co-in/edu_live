@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { generateChatCompletion, DEFAULT_OPENROUTER_MODEL } from "../src/llm";
 import type { Env } from "../src/index";
 
@@ -144,5 +144,22 @@ describe("generateChatCompletion", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+});
+
+describe("generateChatCompletion jsonMode", () => {
+  it("asks OpenRouter for a JSON object only when jsonMode is set", async () => {
+    const { generateChatCompletion } = await import("../src/llm");
+    const bodies: Record<string, unknown>[] = [];
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({ choices: [{ message: { content: "{}" } }] }), { status: 200 });
+    });
+    const env = { OPENROUTER_API_KEY: "k" } as never;
+    await generateChatCompletion([{ role: "user", content: "x" }], 10, env, { llmProvider: "openrouter", llmModelSlug: "m" });
+    await generateChatCompletion([{ role: "user", content: "x" }], 10, env, { llmProvider: "openrouter", llmModelSlug: "m" }, { jsonMode: true });
+    expect(bodies[0].response_format).toBeUndefined();
+    expect(bodies[1].response_format).toEqual({ type: "json_object" });
+    spy.mockRestore();
   });
 });

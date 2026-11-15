@@ -3,6 +3,7 @@ import type { Blueprint, BlueprintSlot } from "./questionPaperBlueprints";
 import type { ChapterChunks } from "./questionPaperRetrieval";
 import { generateChatCompletion } from "./llm";
 import { generateDiagramImage, isDiagramAllowlisted } from "./questionPaperImageGen";
+import { recordUsage } from "./transactionLog";
 
 export interface GeneratedQuestion {
   section: string;
@@ -55,9 +56,16 @@ export const MAX_GENERATED_DIAGRAMS = 3;
 // well above "the JSON alone would need this many tokens." Raised with
 // margin; the default model is OpenRouter's free tier, so a higher cap
 // doesn't cost more unless a paid model is configured.
-const TOKENS_PER_QUESTION = 450;
+// Raised from 450/24000 when correctAnswer started carrying the full official
+// answer (points and steps) for 2-5 mark questions, not just a final value.
+const TOKENS_PER_QUESTION = 600;
 const MIN_GENERATION_TOKENS = 4000;
-const MAX_GENERATION_TOKENS = 24000;
+const MAX_GENERATION_TOKENS = 32000;
+
+// Part of the question-paper cache key. Bump whenever the generation or
+// answer-key prompts change, so papers cached under the old prompts are
+// regenerated instead of being served from cache.
+export const QUESTION_PAPER_PROMPT_VERSION = "prompt-2026-11-15e";
 
 export function computeGenerationMaxTokens(totalQuestions: number): number {
   return Math.min(MAX_GENERATION_TOKENS, Math.max(MIN_GENERATION_TOKENS, totalQuestions * TOKENS_PER_QUESTION));
@@ -103,18 +111,31 @@ export function buildGenerationPrompt(
     "You are an experienced CBSE/ICSE class 10 teacher setting an exam paper. " +
     "Follow the exact slot list given. Stay within standard NCERT/CBSE/ICSE class 10 syllabus " +
     "conventions. Prefer the provided source text; where it's thin, use your own syllabus " +
-    "knowledge rather than inventing facts. " +
-    "The source material may include ready-made question papers (a numbered list of questions) and their " +
-    "answer keys. These are often in separate documents: the questions in one source, the answers in another. " +
-    "Those questions and answers are pre-verified exam content. For any slot whose type and marks match a " +
-    "pre-existing question, copy that question's wording verbatim rather than writing a new one. " +
-    "Find its answer in any source provided, matching by the question's wording (question numbers may differ " +
-    "between documents, and two papers can share a subject without being the same test). Copy an answer only " +
-    "when its question matches. If no matching answer appears in any source, work the answer out from syllabus " +
-    "knowledge and do not describe it as official. Only compose an original question for a slot when no " +
-    "matching pre-existing question is left to reuse (e.g. the slot asks for a type, like assertion_reason, " +
-    "that the source doesn't contain). Return ONLY valid JSON matching the schema described, with no markdown " +
-    "fences and no commentary.";
+    "knowledge rather than inventing facts.\n\n" +
+    "Kinds of source: study notes, ready-made question papers (numbered questions with options and marks), and " +
+    "answer keys or marking schemes for those papers. A paper and its answer key are usually separate sources. " +
+    "An answer key lists answers by question number and usually does not repeat the question text. A key " +
+    "belongs to a paper when its file name is the paper's name with something like \"WithAnswers\" added, or " +
+    "when its title names the same paper.\n\n" +
+    "Reusing questions: questions in a provided question paper are pre-verified exam content. For any slot whose " +
+    "type and marks match one of them, copy that question's wording verbatim (with its options and any OR " +
+    "alternative) rather than writing a new one. A slot whose chapter is an answer key may reuse questions from " +
+    "the question paper that key belongs to, if that paper is provided. Never use the same question twice. Do not " +
+    "reuse a question that an answer key or its notes mark as flawed, as having no correct option, or as having " +
+    "an unclear diagram, or whose official answer is not a single clear answer (for example '-' or a note). If you " +
+    "change anything in a reused question - wording, numbers, options, scenario or question type - it is no longer " +
+    "the official question: treat it as an original question. Never turn answer-key text, marking instructions or tutor notes into questions; if a " +
+    "chapter's only source is an answer key and its paper is not provided, write new questions whose answers are " +
+    "in that key. Only compose an original question for a slot when no matching pre-existing question is left to " +
+    "reuse (e.g. the slot asks for a type, like assertion_reason, that the source doesn't contain).\n\n" +
+    "Answers: for a reused question copied unchanged, take its answer from the answer key of the same paper, " +
+    "matching by question number and checking that the answer fits the question's topic. Never take an answer from " +
+    "a key that belongs to a different paper, even when the question number is the same. Never copy an official " +
+    "answer onto a question you changed or wrote yourself: work out the correct answer for the question exactly as " +
+    "you wrote it. If no matching answer is provided, or it does not fit the question, work the answer out from the " +
+    "source text or syllabus knowledge. Leave out mark " +
+    "tags such as [1], [½] or \"(2 marks)\" from question and answer text; marks belong only in the marks field.\n\n" +
+    "Return ONLY valid JSON matching the schema described, with no markdown fences and no commentary.";
 
   const slotLines = chapterSlotsInOrder(chaptersWithSlots)
     .map(
@@ -126,6 +147,8 @@ export function buildGenerationPrompt(
   const sourceText = chaptersWithSlots
     .map(({ chunks }) => `--- Source: ${chunks.filename} ---\n${sampleChunkText(chunks)}`)
     .join("\n\n");
+
+  const totalSlotQuestions = chaptersWithSlots.reduce((sum, c) => sum + c.slots.reduce((n, s) => n + s.count, 0), 0);
 
   const user =
     `Blueprint slots (fill exactly this many questions per slot, in order; draw each slot's questions from ` +
@@ -140,14 +163,20 @@ export function buildGenerationPrompt(
     `For questionType "mcq": the "text" field MUST end with exactly four lettered options on their own lines, ` +
     `formatted "(A) ...", "(B) ...", "(C) ...", "(D) ...". For questionType "assertion_reason": "text" must state ` +
     `"Assertion (A): ..." then "Reason (R): ...", followed by the four standard CBSE options (A)-(D) for how the ` +
-    `assertion and reason relate. For every question of every type, also return "correctAnswer": a short string ` +
-    `giving the correct option letter (for mcq/assertion_reason, e.g. "(B)") or the correct final value/result (for ` +
-    `short_answer/long_answer/case_based) - this must be determinable from the source material or standard syllabus ` +
-    `knowledge, never omitted and never invented without basis. If the source text includes an official answer for ` +
-    `a question you reused verbatim, "correctAnswer" must be that official answer, not a re-derived one.\n\n` +
+    `assertion and reason relate. For every question of every type, also return "correctAnswer". For ` +
+    `mcq/assertion_reason: exactly one option letter, e.g. "(B)", that is correct for the options as you wrote them ` +
+    `(for assertion_reason, decide from whether A and R are each true and whether R explains A) - never "---", a ` +
+    `blank, or a note. For short_answer/long_answer/case_based: the ` +
+    `answer's key points, values and steps (several sentences is fine for higher marks), without mark tags; for a ` +
+    `question with an OR alternative, answer each alternative and label them. The answer must come from the source ` +
+    `material or standard syllabus knowledge, never omitted and never invented without basis. If the answer key of ` +
+    `the same paper gives the answer to a question you reused, "correctAnswer" must be that official answer (its ` +
+    `points and values), not a re-derived one.\n\n` +
     `Return JSON: {"questions": [{"section": string, "questionType": string, "marks": number, "text": string, ` +
     `"correctAnswer": string, "latex"?: string, "table"?: {"headers": string[], "rows": string[][]}}]}. The questions ` +
-    `array must contain exactly the total count across all slots, in the same order as the slot list.`;
+    `array must contain exactly ${totalSlotQuestions} questions (the total count across all slots), in the same order ` +
+    `as the slot list - if there aren't enough questions to reuse, write original ones rather than returning fewer. ` +
+    `Inside JSON strings, escape every backslash in LaTeX as \\\\ (for example "\\\\frac{1}{2}").`;
 
   return { system, user };
 }
@@ -162,16 +191,87 @@ interface RawQuestion {
   correctAnswer?: unknown;
 }
 
-// JSON only permits a backslash before one of these characters. Models
-// asked for CBSE/physics content routinely write inline LaTeX-ish notation
-// (e.g. "\Omega" for the ohm symbol, "\times", "\(...\)") directly in a
-// text field without doubling the backslash, which isn't valid JSON and
-// fails with "Bad escaped character". Escaping any backslash not already
-// followed by a legal JSON escape char turns that stray "\O" into a literal
-// "\O" in the parsed string (harmless - at worst a slightly odd-looking
-// character sequence) instead of a hard parse failure.
-function sanitizeInvalidJsonEscapes(text: string): string {
-  return text.replace(/\\(?!["\\/bfnrtu])/g, "\\\\");
+/**
+ * Repairs the content of JSON strings written by a model. Walks the text,
+ * tracking whether it is inside a string, so structural whitespace between
+ * values is left alone. Inside a string it escapes:
+ * - raw newlines, tabs and other control characters (models sometimes write
+ *   multi-line answers literally), and
+ * - a double quote that is not followed by , } ] or : - a quote in the text
+ *   itself (seen in a long Maths answer: 'the strict interpretation of "a
+ *   vowel which ..."'), which would otherwise end the string early.
+ * Only used after a plain parse fails.
+ */
+/**
+ * Whether the quote at `index` (inside a string) really ends it: it must be
+ * followed by } ] or :, or by a comma and then the start of another JSON value
+ * (a string, object, array, number, true, false or null). A quote followed by
+ * a comma and prose (', the answer is ...') is part of the text.
+ */
+function closesJsonString(text: string, index: number): boolean {
+  let j = index + 1;
+  while (j < text.length && /\s/.test(text[j])) j++;
+  if (j >= text.length || "}]:".includes(text[j])) return true;
+  if (text[j] !== ",") return false;
+  j++;
+  while (j < text.length && /\s/.test(text[j])) j++;
+  if (j >= text.length) return true;
+  return /["{[\-0-9]/.test(text[j]) || /^(true|false|null)\s*[,}\]]/.test(text.slice(j, j + 12));
+}
+
+export function escapeRawControlCharsInStrings(text: string): string {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        if (closesJsonString(text, i)) {
+          inString = false;
+        } else {
+          out += '\\"';
+          continue;
+        }
+      } else if (ch.charCodeAt(0) < 0x20) {
+        out += ch === "\n" ? "\\n" : ch === "\r" ? "\\r" : ch === "\t" ? "\\t" : `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`;
+        continue;
+      }
+    } else if (ch === '"') {
+      inString = true;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+/**
+ * JSON only permits a backslash before one of " \ / b f n r t u. Models
+ * writing CBSE maths and physics routinely put raw LaTeX ("\Omega", "\times",
+ * "\sqrt") in a string without doubling the backslash, which fails with "Bad
+ * escaped character". Only used after a plain JSON.parse has failed. Reads
+ * escapes as pairs, left to right, so an already-escaped "\\sqrt" stays intact
+ * while a raw "\sqrt" in the same reply is repaired (an earlier per-backslash
+ * regex turned "\\sqrt" into an invalid "\\\sqrt", so a reply mixing both
+ * never parsed). Also repairs "\u" not followed by 4 hex digits, and treats
+ * \f \b \t \r directly followed by a letter as LaTeX (\frac, \beta, \theta,
+ * \rho), since a model never means a form feed or tab there. "\n" is left
+ * alone: it is far more often a real newline than \nabla or \neq.
+ */
+export function sanitizeInvalidJsonEscapes(text: string): string {
+  return text.replace(/\\(u[0-9a-fA-F]{4}|[\s\S])/g, (match, escaped: string, offset: number) => {
+    if (escaped.length === 5) return match; // valid \uXXXX
+    if ('"\\/n'.includes(escaped)) return match; // valid escapes, kept as-is
+    if ("fbtr".includes(escaped)) {
+      // \frac, \beta, \theta, \rho -> LaTeX; otherwise a real escape
+      return /[A-Za-z]/.test(text.charAt(offset + 2)) ? "\\\\" + escaped : match;
+    }
+    return "\\\\" + escaped; // invalid escape, including \u without 4 hex digits
+  });
 }
 
 /**
@@ -195,10 +295,14 @@ export function parseLlmJson(raw: string): unknown {
   const last = trimmed.lastIndexOf("}");
   if (first !== -1 && last > first) attempts.push(trimmed.slice(first, last + 1));
 
-  // Try every candidate as-is first, then every candidate with invalid
-  // escapes sanitized - as-is first, since sanitizing is a no-op textual
-  // change only needed when the plain parse actually fails.
-  const allAttempts = [...attempts, ...attempts.map(sanitizeInvalidJsonEscapes)];
+  // Try every candidate as-is first, then with invalid escapes sanitized,
+  // then also with raw control characters inside strings escaped - as-is
+  // first, since each repair is only needed when the plain parse fails.
+  const allAttempts = [
+    ...attempts,
+    ...attempts.map(sanitizeInvalidJsonEscapes),
+    ...attempts.map((a) => escapeRawControlCharsInStrings(sanitizeInvalidJsonEscapes(a))),
+  ];
 
   let lastError: unknown;
   for (const candidate of allAttempts) {
@@ -269,10 +373,29 @@ function parseEntries(raw: string, orderedSlots: BlueprintSlot[]): ParsedEntry[]
       text: typeof q?.text === "string" ? q.text : String(q?.text ?? ""),
       ...(typeof q?.latex === "string" && q.latex ? { latex: q.latex } : {}),
       ...(isValidTable(q?.table) ? { table: q.table } : {}),
-      ...(typeof q?.correctAnswer === "string" && q.correctAnswer ? { correctAnswer: q.correctAnswer } : {}),
+      ...usableCorrectAnswer(slot.questionType, q?.correctAnswer),
     };
     return { question, wantsDiagram: slot.wantsDiagram === true };
   });
+}
+
+/**
+ * Drops a correctAnswer the answer-key step can't use, so that step works the
+ * answer out itself instead of passing a placeholder through. Seen in
+ * practice: "---" copied from an answer key that marks a question as flawed.
+ * Multiple-choice and assertion-reason answers must start with one option
+ * letter; any answer that is only dashes or blank is dropped for every type.
+ */
+export function usableCorrectAnswer(questionType: string, value: unknown): { correctAnswer?: string } {
+  if (typeof value !== "string") return {};
+  const answer = value.trim();
+  if (!answer || /^[-–—_.\s]*$/.test(answer)) return {};
+  const needsLetter = questionType === "mcq" || questionType === "assertion_reason";
+  if (needsLetter && !/^\(?[A-Da-d]\)?(?=$|[\s.,:;)-])/.test(answer)) {
+    console.warn(`question paper generation: dropping unusable ${questionType} correctAnswer ${JSON.stringify(answer.slice(0, 40))}`);
+    return {};
+  }
+  return { correctAnswer: value };
 }
 
 function groupIntoPaper(entries: ParsedEntry[], blueprint: Blueprint): GeneratedPaper {
@@ -325,8 +448,20 @@ export async function generatePaper(
     ],
     computeGenerationMaxTokens(totalQuestions),
     env,
-    { llmProvider: config.llmProvider, llmModelSlug: config.questionPaperModelSlug }
+    { llmProvider: config.llmProvider, llmModelSlug: config.questionPaperModelSlug },
+    { jsonMode: true }
   );
+  await recordUsage(env, {
+    pathTaken: "question_paper",
+    description: `${blueprint.subject} ${blueprint.marksTotal} marks, ${totalQuestions} questions: ${chaptersWithSlots.map((c) => c.chunks.filename).join(", ")}`,
+    provider: result.provider,
+    model: result.model,
+    inputTokens: result.inputTokens,
+    outputTokens: result.outputTokens,
+    costUsd: result.costUsd,
+    inputSummary: `Blueprint ${blueprint.version}, ${chaptersWithSlots.length} source document(s), prompt ${system.length + user.length} characters`,
+    outputSummary: result.text,
+  });
 
   const entries = parseEntries(result.text, orderedSlots);
   const paper = groupIntoPaper(entries, blueprint);

@@ -194,3 +194,83 @@ describe("handleQuestionPaperAnswerKey / handleQuestionPaperPdf", () => {
     expect(response.status).toBe(404);
   });
 });
+
+describe("question paper cache key", () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it("includes the prompt version, so papers cached under older prompts are regenerated", async () => {
+    vi.spyOn(config, "getRuntimeConfig").mockResolvedValue({ llmProvider: "openrouter", questionPaperModelSlug: "x", questionPaperImageGenEnabled: false } as any);
+    const keySpy = vi.spyOn(cache, "computeCacheKey");
+    vi.spyOn(cache, "findCachedPaper").mockResolvedValue(null);
+    vi.spyOn(retrieval, "fetchAllChapterChunks").mockResolvedValue({ found: [], missing: ["missing.pdf"] });
+    const request = new Request("http://worker/question-paper/generate", {
+      method: "POST",
+      body: JSON.stringify({ subject: "Science", chapterFilenames: ["missing.pdf"], marksTotal: 40 }),
+    });
+    await handleQuestionPaperGenerate(request, baseEnv());
+    expect(keySpy).toHaveBeenCalled();
+    expect(String(keySpy.mock.calls[0][3])).toContain(generation.QUESTION_PAPER_PROMPT_VERSION);
+  });
+});
+
+describe("answer keys get no slots when a question paper is selected", () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it("recognises answer-key file names", async () => {
+    const { isAnswerKeyFilename } = await import("../src/questionPaper");
+    expect(isAnswerKeyFilename("Edukripa_CBSE10_Maths_Paper1_WithAnswers.pdf")).toBe(true);
+    expect(isAnswerKeyFilename("Edukripa_Science_Test_Paper_1WithAnswers.pdf")).toBe(true);
+    expect(isAnswerKeyFilename("Physics Answer Key.pdf")).toBe(true);
+    expect(isAnswerKeyFilename("Marking Scheme 2025.pdf")).toBe(true);
+    expect(isAnswerKeyFilename("Edukripa_Science_Test_Paper_1.pdf")).toBe(false);
+    expect(isAnswerKeyFilename("carbon compound notes.pdf")).toBe(false);
+    expect(isAnswerKeyFilename("control coordination test.pdf")).toBe(false);
+  });
+
+  it("gives every slot to the question paper and none to its answer key, but still passes the key's text", async () => {
+    vi.spyOn(config, "getRuntimeConfig").mockResolvedValue({ llmProvider: "openrouter", questionPaperModelSlug: "x", questionPaperImageGenEnabled: false } as any);
+    vi.spyOn(cache, "findCachedPaper").mockResolvedValue(null);
+    const chunk = (t: string) => [{ chunkId: 0, page: 1, text: t, pageImageKey: null }];
+    vi.spyOn(retrieval, "fetchAllChapterChunks").mockResolvedValue({
+      found: [
+        { filename: "Paper1.pdf", chunkCount: 13, chunks: chunk("questions") },
+        { filename: "Paper1_WithAnswers.pdf", chunkCount: 10, chunks: chunk("answers") },
+      ],
+      missing: [],
+    });
+    const genSpy = vi.spyOn(generation, "generatePaper").mockResolvedValue({ subject: "Science", marksTotal: 80, blueprintVersion: "v", sections: [] });
+    vi.spyOn(cache, "saveNewPaper").mockImplementation(async (_env, row) => ({ ...row, createdAt: "t" }) as any);
+    await handleQuestionPaperGenerate(
+      new Request("http://worker/question-paper/generate", {
+        method: "POST",
+        body: JSON.stringify({ subject: "Science", chapterFilenames: ["Paper1.pdf", "Paper1_WithAnswers.pdf"], marksTotal: 80 }),
+      }),
+      baseEnv()
+    );
+    const chapters = genSpy.mock.calls[0][2] as { chunks: { filename: string }; slots: unknown[] }[];
+    const paper = chapters.find((c) => c.chunks.filename === "Paper1.pdf")!;
+    const key = chapters.find((c) => c.chunks.filename === "Paper1_WithAnswers.pdf")!;
+    expect(key.slots).toHaveLength(0);
+    expect(paper.slots.length).toBeGreaterThan(0);
+  });
+
+  it("still gives slots to an answer key when it is the only file selected", async () => {
+    vi.spyOn(config, "getRuntimeConfig").mockResolvedValue({ llmProvider: "openrouter", questionPaperModelSlug: "x", questionPaperImageGenEnabled: false } as any);
+    vi.spyOn(cache, "findCachedPaper").mockResolvedValue(null);
+    vi.spyOn(retrieval, "fetchAllChapterChunks").mockResolvedValue({
+      found: [{ filename: "Paper1_WithAnswers.pdf", chunkCount: 10, chunks: [{ chunkId: 0, page: 1, text: "answers", pageImageKey: null }] }],
+      missing: [],
+    });
+    const genSpy = vi.spyOn(generation, "generatePaper").mockResolvedValue({ subject: "Science", marksTotal: 80, blueprintVersion: "v", sections: [] });
+    vi.spyOn(cache, "saveNewPaper").mockImplementation(async (_env, row) => ({ ...row, createdAt: "t" }) as any);
+    await handleQuestionPaperGenerate(
+      new Request("http://worker/question-paper/generate", {
+        method: "POST",
+        body: JSON.stringify({ subject: "Science", chapterFilenames: ["Paper1_WithAnswers.pdf"], marksTotal: 80 }),
+      }),
+      baseEnv()
+    );
+    const chapters = genSpy.mock.calls[0][2] as { slots: unknown[] }[];
+    expect(chapters[0].slots.length).toBeGreaterThan(0);
+  });
+});
