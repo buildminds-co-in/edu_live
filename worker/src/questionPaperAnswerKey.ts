@@ -13,10 +13,11 @@ export interface AnswerKey {
 }
 
 // A flat 3,000 tokens left about 80 tokens per answer on an 80-mark paper
-// (about 38 questions), which truncated mid-JSON once answers carried the full
-// official points. Scales with the paper, bounded.
+// (about 38 questions). Maths keys with worked steps measured about 9,500
+// tokens and were cut off mid-JSON (finish_reason "length"), so this allows
+// 700 per question, bounded. The prompt also asks for answers sized to marks.
 export function answerKeyMaxTokens(questionCount: number): number {
-  return Math.min(16000, Math.max(3000, questionCount * 250));
+  return Math.min(32000, Math.max(3000, questionCount * 700));
 }
 
 export async function generateAnswerKey(
@@ -32,6 +33,8 @@ export async function generateAnswerKey(
     "letter, also state what that option says. Do not contradict it, drop parts of it, or add facts it does not " +
     "need. For a question with an OR alternative, answer each alternative and label them. Only work out the " +
     "answer yourself for a question with no correctAnswer given. Do not include mark tags such as [1] or [½]. " +
+    "Size each answer to its marks (at most about 25 words per mark): do not restate the question or list the " +
+    "options. Inside JSON strings, escape every backslash in LaTeX as \\\\ (for example \"\\\\frac{1}{2}\"). " +
     "Return ONLY valid JSON.";
 
   const questionLines = paper.sections
@@ -48,17 +51,60 @@ export async function generateAnswerKey(
     `Return JSON: {"entries": [{"section": string, "questionIndex": number, "answer": string}]}, one entry per question above.`;
 
   const questionCount = paper.sections.reduce((n, s) => n + s.questions.length, 0);
-  const result = await generateChatCompletion(
-    [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ],
-    answerKeyMaxTokens(questionCount),
-    env,
-    { llmProvider: config.llmProvider, llmModelSlug: config.questionPaperModelSlug }
-  );
+  const attempt = async (): Promise<AnswerKey> => {
+    const result = await generateChatCompletion(
+      [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      answerKeyMaxTokens(questionCount),
+      env,
+      { llmProvider: config.llmProvider, llmModelSlug: config.questionPaperModelSlug },
+      { jsonSchema: { name: "answer_key", schema: answerKeySchema(questionCount) } }
+    );
+    return validateAnswerKey(parseLlmJson(result.text));
+  };
 
-  return validateAnswerKey(parseLlmJson(result.text));
+  // Structured output guarantees valid JSON, but the model occasionally stops
+  // early (measured: 9 of 38 entries once in 4 runs). One retry when the key
+  // is incomplete or unparseable; the more complete result wins.
+  let first: AnswerKey | null = null;
+  try {
+    first = await attempt();
+    if (first.entries.length >= questionCount) return first;
+    console.error(`answer key had ${first.entries.length}/${questionCount} entries, retrying once`);
+  } catch (err) {
+    console.error("answer key attempt failed, retrying once", err);
+  }
+  try {
+    const second = await attempt();
+    return first && first.entries.length > second.entries.length ? first : second;
+  } catch (err) {
+    if (first) return first;
+    throw err;
+  }
+}
+
+/** Strict schema: exactly one entry per question. */
+export function answerKeySchema(questionCount: number): Record<string, unknown> {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["entries"],
+    properties: {
+      entries: {
+        type: "array",
+        minItems: questionCount,
+        maxItems: questionCount,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["section", "questionIndex", "answer"],
+          properties: { section: { type: "string" }, questionIndex: { type: "integer" }, answer: { type: "string" } },
+        },
+      },
+    },
+  };
 }
 
 /**

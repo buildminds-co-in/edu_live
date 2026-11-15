@@ -64,7 +64,7 @@ const MAX_GENERATION_TOKENS = 32000;
 // Part of the question-paper cache key. Bump whenever the generation or
 // answer-key prompts change, so papers cached under the old prompts are
 // regenerated instead of being served from cache.
-export const QUESTION_PAPER_PROMPT_VERSION = "prompt-2026-11-15c";
+export const QUESTION_PAPER_PROMPT_VERSION = "prompt-2026-11-15d";
 
 export function computeGenerationMaxTokens(totalQuestions: number): number {
   return Math.min(MAX_GENERATION_TOKENS, Math.max(MIN_GENERATION_TOKENS, totalQuestions * TOKENS_PER_QUESTION));
@@ -190,23 +190,76 @@ interface RawQuestion {
   correctAnswer?: unknown;
 }
 
-// JSON only permits a backslash before one of these characters. Models
-// asked for CBSE/physics content routinely write inline LaTeX-ish notation
-// (e.g. "\Omega" for the ohm symbol, "\times", "\(...\)") directly in a
-// text field without doubling the backslash, which isn't valid JSON and
-// fails with "Bad escaped character". Escaping any backslash not already
-// followed by a legal JSON escape char turns that stray "\O" into a literal
-// "\O" in the parsed string (harmless - at worst a slightly odd-looking
-// character sequence) instead of a hard parse failure.
 /**
- * Only used after a plain JSON.parse has failed. Reads escapes as pairs, left
- * to right, so an already-escaped "\\sqrt" stays intact while a raw LaTeX
- * "\sqrt" in the same reply is repaired (the old per-backslash regex turned
- * "\\sqrt" into an invalid "\\\sqrt", so a reply mixing both never parsed).
- * Also repairs "\u" not followed by 4 hex digits, and treats \f \b \t \r
- * directly followed by a letter as LaTeX (\frac, \beta, \theta, \rho), since a
- * model never means a form feed or tab there. "\n" is left alone: it is far
- * more often a real newline than \nabla or \neq.
+ * Repairs the content of JSON strings written by a model. Walks the text,
+ * tracking whether it is inside a string, so structural whitespace between
+ * values is left alone. Inside a string it escapes:
+ * - raw newlines, tabs and other control characters (models sometimes write
+ *   multi-line answers literally), and
+ * - a double quote that is not followed by , } ] or : - a quote in the text
+ *   itself (seen in a long Maths answer: 'the strict interpretation of "a
+ *   vowel which ..."'), which would otherwise end the string early.
+ * Only used after a plain parse fails.
+ */
+/**
+ * Whether the quote at `index` (inside a string) really ends it: it must be
+ * followed by } ] or :, or by a comma and then the start of another JSON value
+ * (a string, object, array, number, true, false or null). A quote followed by
+ * a comma and prose (', the answer is ...') is part of the text.
+ */
+function closesJsonString(text: string, index: number): boolean {
+  let j = index + 1;
+  while (j < text.length && /\s/.test(text[j])) j++;
+  if (j >= text.length || "}]:".includes(text[j])) return true;
+  if (text[j] !== ",") return false;
+  j++;
+  while (j < text.length && /\s/.test(text[j])) j++;
+  if (j >= text.length) return true;
+  return /["{[\-0-9]/.test(text[j]) || /^(true|false|null)\s*[,}\]]/.test(text.slice(j, j + 12));
+}
+
+export function escapeRawControlCharsInStrings(text: string): string {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        if (closesJsonString(text, i)) {
+          inString = false;
+        } else {
+          out += '\\"';
+          continue;
+        }
+      } else if (ch.charCodeAt(0) < 0x20) {
+        out += ch === "\n" ? "\\n" : ch === "\r" ? "\\r" : ch === "\t" ? "\\t" : `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`;
+        continue;
+      }
+    } else if (ch === '"') {
+      inString = true;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+/**
+ * JSON only permits a backslash before one of " \ / b f n r t u. Models
+ * writing CBSE maths and physics routinely put raw LaTeX ("\Omega", "\times",
+ * "\sqrt") in a string without doubling the backslash, which fails with "Bad
+ * escaped character". Only used after a plain JSON.parse has failed. Reads
+ * escapes as pairs, left to right, so an already-escaped "\\sqrt" stays intact
+ * while a raw "\sqrt" in the same reply is repaired (an earlier per-backslash
+ * regex turned "\\sqrt" into an invalid "\\\sqrt", so a reply mixing both
+ * never parsed). Also repairs "\u" not followed by 4 hex digits, and treats
+ * \f \b \t \r directly followed by a letter as LaTeX (\frac, \beta, \theta,
+ * \rho), since a model never means a form feed or tab there. "\n" is left
+ * alone: it is far more often a real newline than \nabla or \neq.
  */
 export function sanitizeInvalidJsonEscapes(text: string): string {
   return text.replace(/\\(u[0-9a-fA-F]{4}|[\s\S])/g, (match, escaped: string, offset: number) => {
@@ -241,10 +294,14 @@ export function parseLlmJson(raw: string): unknown {
   const last = trimmed.lastIndexOf("}");
   if (first !== -1 && last > first) attempts.push(trimmed.slice(first, last + 1));
 
-  // Try every candidate as-is first, then every candidate with invalid
-  // escapes sanitized - as-is first, since sanitizing is a no-op textual
-  // change only needed when the plain parse actually fails.
-  const allAttempts = [...attempts, ...attempts.map(sanitizeInvalidJsonEscapes)];
+  // Try every candidate as-is first, then with invalid escapes sanitized,
+  // then also with raw control characters inside strings escaped - as-is
+  // first, since each repair is only needed when the plain parse fails.
+  const allAttempts = [
+    ...attempts,
+    ...attempts.map(sanitizeInvalidJsonEscapes),
+    ...attempts.map((a) => escapeRawControlCharsInStrings(sanitizeInvalidJsonEscapes(a))),
+  ];
 
   let lastError: unknown;
   for (const candidate of allAttempts) {
@@ -390,7 +447,8 @@ export async function generatePaper(
     ],
     computeGenerationMaxTokens(totalQuestions),
     env,
-    { llmProvider: config.llmProvider, llmModelSlug: config.questionPaperModelSlug }
+    { llmProvider: config.llmProvider, llmModelSlug: config.questionPaperModelSlug },
+    { jsonMode: true }
   );
 
   const entries = parseEntries(result.text, orderedSlots);

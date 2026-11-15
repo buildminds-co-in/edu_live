@@ -39,11 +39,26 @@ function estimateCostFromPricing(model: string, inputTokens: number, outputToken
   return (inputTokens / 1_000_000) * pricing.in + (outputTokens / 1_000_000) * pricing.out;
 }
 
+export interface GenerationOptions {
+  // Ask the provider for a guaranteed-valid JSON object (OpenRouter
+  // response_format json_object). Used by question-paper generation and
+  // answer keys, whose long LaTeX-heavy Maths answers otherwise came back with
+  // raw newlines, unescaped quotes or bad escapes about every time. Ignored by
+  // Workers AI.
+  jsonMode?: boolean;
+  // Strict structured output (OpenRouter response_format json_schema). Gemini
+  // enforces this while generating, unlike jsonMode, which this route ignored:
+  // Maths answer keys failed to parse 4/4 with jsonMode and 0/4 with a schema.
+  // Takes precedence over jsonMode. Ignored by Workers AI.
+  jsonSchema?: { name: string; schema: Record<string, unknown> };
+}
+
 async function callOpenRouter(
   messages: ChatMessage[],
   maxTokens: number,
   apiKey: string,
-  model: string
+  model: string,
+  options: GenerationOptions = {}
 ): Promise<{ text: string; inputTokens: number | null; outputTokens: number | null; costUsd: number }> {
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -51,7 +66,17 @@ async function callOpenRouter(
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ model, messages, max_tokens: maxTokens, usage: { include: true } }),
+    body: JSON.stringify({
+      model,
+      messages,
+      max_tokens: maxTokens,
+      usage: { include: true },
+      ...(options.jsonSchema
+        ? { response_format: { type: "json_schema", json_schema: { name: options.jsonSchema.name, strict: true, schema: options.jsonSchema.schema } } }
+        : options.jsonMode
+          ? { response_format: { type: "json_object" } }
+          : {}),
+    }),
   });
 
   if (!response.ok) {
@@ -93,11 +118,12 @@ export async function generateChatCompletion(
   messages: ChatMessage[],
   maxTokens: number,
   env: Env,
-  config: { llmProvider: "openrouter" | "workers-ai"; llmModelSlug: string }
+  config: { llmProvider: "openrouter" | "workers-ai"; llmModelSlug: string },
+  options: GenerationOptions = {}
 ): Promise<LlmResult> {
   if (config.llmProvider === "openrouter") {
     const model = config.llmModelSlug || DEFAULT_OPENROUTER_MODEL;
-    const result = await callOpenRouter(messages, maxTokens, env.OPENROUTER_API_KEY, model);
+    const result = await callOpenRouter(messages, maxTokens, env.OPENROUTER_API_KEY, model, options);
     return {
       text: result.text,
       provider: "openrouter",

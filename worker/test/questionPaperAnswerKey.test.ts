@@ -119,8 +119,8 @@ describe("answer key prompt and size", () => {
   it("scales max tokens with the number of questions, within bounds", async () => {
     const { answerKeyMaxTokens } = await import("../src/questionPaperAnswerKey");
     expect(answerKeyMaxTokens(1)).toBe(3000);
-    expect(answerKeyMaxTokens(38)).toBe(9500);
-    expect(answerKeyMaxTokens(1000)).toBe(16000);
+    expect(answerKeyMaxTokens(38)).toBe(26600);
+    expect(answerKeyMaxTokens(1000)).toBe(32000);
   });
 
   it("passes the scaled limit to the model", async () => {
@@ -132,5 +132,41 @@ describe("answer key prompt and size", () => {
     });
     await generateAnswerKey({} as Env, paper, { llmProvider: "openrouter", questionPaperModelSlug: "x" });
     expect(spy.mock.calls[0][1]).toBe(answerKeyMaxTokens(1));
+  });
+});
+
+describe("answer key structured output and retry", () => {
+  const twoQuestionPaper: GeneratedPaper = {
+    ...paper,
+    sections: [{ section: "A", questions: [
+      { section: "A", questionType: "mcq", marks: 1, text: "Q1" },
+      { section: "A", questionType: "mcq", marks: 1, text: "Q2" },
+    ] }],
+  };
+  const reply = (n: number) => ({
+    text: JSON.stringify({ entries: Array.from({ length: n }, (_, i) => ({ section: "A", questionIndex: i, answer: `a${i}` })) }),
+    provider: "openrouter" as const,
+    model: "x",
+  });
+
+  it("requests a strict schema with exactly one entry per question", async () => {
+    const spy = vi.spyOn(llm, "generateChatCompletion").mockResolvedValue(reply(2));
+    await generateAnswerKey({} as Env, twoQuestionPaper, { llmProvider: "openrouter", questionPaperModelSlug: "x" });
+    const options = spy.mock.calls[0][4] as { jsonSchema?: { schema: { properties: { entries: { minItems: number; maxItems: number } } } } };
+    expect(options.jsonSchema?.schema.properties.entries.minItems).toBe(2);
+    expect(options.jsonSchema?.schema.properties.entries.maxItems).toBe(2);
+  });
+
+  it("retries once when the key is incomplete and keeps the complete result", async () => {
+    const spy = vi.spyOn(llm, "generateChatCompletion").mockResolvedValueOnce(reply(1)).mockResolvedValueOnce(reply(2));
+    const key = await generateAnswerKey({} as Env, twoQuestionPaper, { llmProvider: "openrouter", questionPaperModelSlug: "x" });
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(key.entries).toHaveLength(2);
+  });
+
+  it("keeps the partial first key if the retry fails", async () => {
+    vi.spyOn(llm, "generateChatCompletion").mockResolvedValueOnce(reply(1)).mockRejectedValueOnce(new Error("upstream"));
+    const key = await generateAnswerKey({} as Env, twoQuestionPaper, { llmProvider: "openrouter", questionPaperModelSlug: "x" });
+    expect(key.entries).toHaveLength(1);
   });
 });

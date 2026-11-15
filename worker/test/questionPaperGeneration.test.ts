@@ -446,3 +446,29 @@ describe("usableCorrectAnswer", () => {
     expect(usableCorrectAnswer("long_answer", "  ---  ")).toEqual({});
   });
 });
+
+describe("escapeRawControlCharsInStrings (repair path only)", () => {
+  it("repairs a multi-line answer written with raw newlines and tabs inside a string", async () => {
+    const { parseLlmJson } = await import("../src/questionPaperGeneration");
+    const raw = '{"entries": [{"answer": "Step 1: x = 2\n\tStep 2: y = 3"}]}';
+    expect(() => JSON.parse(raw)).toThrow();
+    const parsed = parseLlmJson(raw) as { entries: { answer: string }[] };
+    expect(parsed.entries[0].answer).toBe("Step 1: x = 2\n\tStep 2: y = 3");
+  });
+
+  it("leaves whitespace between JSON values alone", async () => {
+    const { escapeRawControlCharsInStrings } = await import("../src/questionPaperGeneration");
+    expect(escapeRawControlCharsInStrings('{\n  "a": "b"\n}')).toBe('{\n  "a": "b"\n}');
+  });
+});
+
+describe("escapeRawControlCharsInStrings: quotes inside text", () => {
+  it("repairs an unescaped quote inside an answer's text", async () => {
+    const { parseLlmJson } = await import("../src/questionPaperGeneration");
+    const raw = '{"entries": [{"section": "A", "answer": "Based on the strict interpretation of "a vowel which occurs most", the answer is 1/3."}]}';
+    expect(() => JSON.parse(raw)).toThrow();
+    const parsed = parseLlmJson(raw) as { entries: { section: string; answer: string }[] };
+    expect(parsed.entries[0].section).toBe("A");
+    expect(parsed.entries[0].answer).toBe('Based on the strict interpretation of "a vowel which occurs most", the answer is 1/3.');
+  });
+});
