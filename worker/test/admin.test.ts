@@ -396,6 +396,7 @@ describe("handleAdminCosting", () => {
       EDU_LIVE_DB: {
         prepare: () => ({
           bind: () => ({
+            all: async () => ({ results: [] }),
             first: async () => null,
           }),
         }),
@@ -414,6 +415,7 @@ describe("handleAdminCosting", () => {
       EDU_LIVE_DB: {
         prepare: (sql: string) => ({
           bind: () => ({
+            all: async () => ({ results: [] }),
             first: async () => {
               if (sql.startsWith("SELECT model, jev_model")) {
                 return {
@@ -445,6 +447,7 @@ describe("handleAdminCosting", () => {
       EDU_LIVE_DB: {
         prepare: () => ({
           bind: () => ({
+            all: async () => ({ results: [] }),
             first: async () => {
               throw new Error("D1 unavailable");
             },
@@ -464,6 +467,7 @@ describe("handleAdminCosting", () => {
       EDU_LIVE_DB: {
         prepare: () => ({
           bind: () => ({
+            all: async () => ({ results: [] }),
             first: async () => null,
           }),
         }),
@@ -482,6 +486,7 @@ describe("handleAdminCosting", () => {
       EDU_LIVE_DB: {
         prepare: () => ({
           bind: () => ({
+            all: async () => ({ results: [] }),
             first: async () => null,
           }),
         }),

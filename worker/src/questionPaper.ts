@@ -3,7 +3,7 @@ import { getRuntimeConfig } from "./config";
 import { isAdminAuthorized } from "./admin";
 import { getBlueprint, distributeSlotsAcrossChapters } from "./questionPaperBlueprints";
 import { fetchAllChapterChunks } from "./questionPaperRetrieval";
-import { generatePaper, GenerationError } from "./questionPaperGeneration";
+import { generatePaper, GenerationError, QUESTION_PAPER_PROMPT_VERSION } from "./questionPaperGeneration";
 import { generateAnswerKey } from "./questionPaperAnswerKey";
 import { renderPaperHtml, renderAnswerKeyHtml, renderHtmlToPdf } from "./questionPaperPdf";
 import { computeCacheKey, findCachedPaper, saveNewPaper, findPaperById, saveAnswerKey, savePdfKey } from "./questionPaperCache";
@@ -21,6 +21,14 @@ function errorResponse(routeName: string, err: unknown, status = 500): Response 
       ? "We couldn't generate this question paper - the AI model's response came back incomplete or malformed. This is usually temporary: please try again, or try a smaller Total Marks value."
       : "Something went wrong - please try again.";
   return Response.json({ error: message }, { status });
+}
+
+/**
+ * True for a file named like an answer key: "..._WithAnswers.pdf",
+ * "...WithAnswers.pdf", "Answer Key", "Marking Scheme", "Answers", "Solutions".
+ */
+export function isAnswerKeyFilename(filename: string): boolean {
+  return /with[\s_-]*answers?|answer[\s_-]*key|marking[\s_-]*scheme|(^|[^a-z])(answers|solutions)([^a-z]|$)/i.test(filename);
 }
 
 export async function handleQuestionPaperCatalog(env: Env): Promise<Response> {
@@ -94,7 +102,14 @@ export async function handleQuestionPaperGenerate(request: Request, env: Env): P
         ? body.modelOverride.trim()
         : null;
     const cacheKeySubject = modelOverride ? `${body.subject}::eval::${modelOverride}` : body.subject;
-    const cacheKey = computeCacheKey(cacheKeySubject, body.marksTotal, body.chapterFilenames, blueprint.version);
+    // The prompt version is part of the key so a prompt change regenerates
+    // papers instead of serving ones cached under the old prompts.
+    const cacheKey = computeCacheKey(
+      cacheKeySubject,
+      body.marksTotal,
+      body.chapterFilenames,
+      `${blueprint.version}|${QUESTION_PAPER_PROMPT_VERSION}`
+    );
     const cached = await findCachedPaper(env, cacheKey);
     if (cached) {
       return Response.json({ id: cached.id, paper: cached.paperJson, cached: true });
@@ -105,7 +120,15 @@ export async function handleQuestionPaperGenerate(request: Request, env: Env): P
       return Response.json({ error: `These chapters aren't available: ${missing.join(", ")}` }, { status: 400 });
     }
 
-    const chapterChunkCounts = Object.fromEntries(found.map((c) => [c.filename, c.chunkCount]));
+    // An answer key gives answers, not questions. When it's selected with a
+    // question paper or notes, its text still goes into the prompt (as the
+    // source of answers) but it gets no slots - slots assigned to it were
+    // left unfilled and papers came back short (measured: 32 of 38 questions,
+    // 56 of 80 marks, the whole of section C missing).
+    const slotSources = found.some((c) => !isAnswerKeyFilename(c.filename))
+      ? found.filter((c) => !isAnswerKeyFilename(c.filename))
+      : found;
+    const chapterChunkCounts = Object.fromEntries(slotSources.map((c) => [c.filename, c.chunkCount]));
     const slotsByChapter = distributeSlotsAcrossChapters(blueprint, chapterChunkCounts);
     const chaptersWithSlots = found.map((chunks) => ({ chunks, slots: slotsByChapter[chunks.filename] ?? [] }));
 

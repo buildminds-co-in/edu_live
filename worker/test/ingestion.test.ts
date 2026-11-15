@@ -520,3 +520,28 @@ describe("handleIngest page screenshot capture", () => {
     expect(allChunkedText).toMatch(/\[Figure:/);
   });
 });
+
+describe("chapter name is required for question-paper documents", () => {
+  const upload = (fields: Record<string, string>) => {
+    const formData = new FormData();
+    formData.append("file", new File(["not a real pdf"], "notes.pdf", { type: "application/pdf" }));
+    for (const [k, v] of Object.entries(fields)) formData.append(k, v);
+    return new Request("https://worker.example/ingest", { method: "POST", body: formData });
+  };
+
+  it.each([
+    [{ subject: "Science" }],
+    [{ subject: "Science", chapter: "   " }],
+  ])("rejects a subject with no chapter name (%o) before writing anything", async (fields) => {
+    const writes: unknown[] = [];
+    const env = makeEnv({
+      INGEST_API_KEY: "",
+      VECTORIZE: { upsert: async (...a: unknown[]) => writes.push(a) } as unknown as VectorizeIndex,
+      PDF_BUCKET: { head: async () => null, put: async (...a: unknown[]) => writes.push(a) } as unknown as R2Bucket,
+    });
+    const response = await handleIngest(upload(fields), env);
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toMatch(/chapter name is required/i);
+    expect(writes).toHaveLength(0);
+  });
+});
