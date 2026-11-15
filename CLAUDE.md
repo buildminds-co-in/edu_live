@@ -124,7 +124,7 @@ Public, no auth, gated only by `config.conceptExplainerEnabled`. Separate pipeli
 
 ### Admin (`/admin/*`, `admin.ts`)
 
-Gated by `x-admin-key` (optional — unauthenticated if unset, e.g. local dev). Routes: `GET /admin/documents` (lists R2 objects, excluding `page-images/` and `cleaned/` prefixes; includes the `enriched` flag), `GET /admin/documents/cleaned?name=` (fetches one document's enriched text on demand), `GET /admin/transactions` (legacy: last N full traces), `GET /admin/transactions/recent?limit=` (summaries for the Transactions tab, max 200), `GET /admin/transactions/:id` (one full trace, loaded when a row is expanded), `GET /admin/costing?range=2h|1d|3d|7d|30d|all` (totals plus `byModel`, with JEV as its own row, and `byFeature`), `GET`/`PUT /admin/config`.
+Gated by `x-admin-key` (optional — unauthenticated if unset, e.g. local dev). Routes: `GET /admin/documents` (lists R2 objects, excluding `page-images/`, `cleaned/` and `question-papers/` prefixes; includes the `enriched` flag), `GET /admin/documents/cleaned?name=` (fetches one document's enriched text on demand), `DELETE /admin/documents?name=` (`documentDeletion.ts`, the dashboard's per-row Delete button after a confirm dialog: removes the document's vectors by its stored `chunkCount`, `page-images/`, `cleaned/`, cached `question_papers` rows that used it plus their `question-papers/<id>*` files, and the source PDF **last** so a failed delete stays listed and can be retried; `transactions` are never touched), `GET /admin/transactions` (legacy: last N full traces), `GET /admin/transactions/recent?limit=` (summaries for the Transactions tab, max 200), `GET /admin/transactions/:id` (one full trace, loaded when a row is expanded), `GET /admin/costing?range=2h|1d|3d|7d|30d|all` (totals plus `byModel`, with JEV as its own row, and `byFeature`), `GET`/`PUT /admin/config`.
 
 ### Runtime config (`config.ts`)
 
@@ -132,7 +132,7 @@ D1-backed (`config` table, key/value), typed, validated, with safe defaults if D
 
 ### Storage
 
-- **R2** `edu-live-pdfs` — three prefixes sharing one bucket: source PDFs (bare filename), `page-images/<filename>/<page>.png` (screenshots), `cleaned/<filename>.md` (enriched text). The latter two are deliberately excluded from `/admin/documents` listing.
+- **R2** `edu-live-pdfs` — four prefixes sharing one bucket: source PDFs (bare filename), `page-images/<filename>/<page>.png` (screenshots), `cleaned/<filename>.md` (enriched text), `question-papers/<id>.pdf`, `<id>-key.pdf` and `<id>/gen-*.png` (rendered papers and generated images). The last three are deliberately excluded from `/admin/documents` listing.
 - **Vectorize** `edu-live-chunks` — one vector per chunk. Deterministic IDs via `chunkVectorId()` (`vectorId.ts`, hash(filename)::chunkId) — re-ingestion overwrites rather than duplicates, and lets `force` re-ingest delete exactly the old document's chunks by recomputing IDs from its old `chunkCount`.
 - **D1** `edu-live-db` — `transactions` (audit log and cost record: one row per chat answer, explanation, question paper, answer key and PDF enrichment attempt, written by `transactionLog.ts` — `recordTransaction` for chat/explain, `recordUsage` for the rest), `config` (runtime settings) and `question_papers` (cache). `path_taken` values: `pdf_only`, `web_fallback`, `concept_explainer`, `question_paper`, `answer_key`, `ingestion_enrichment`. Migrations in `worker/migrations/` (0006 added `answer_style`, `grounded_in`, `retrieval_mode`); apply them before deploying code that writes new columns.
 

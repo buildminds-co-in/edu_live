@@ -3,6 +3,7 @@ import { handleChat } from "./chat";
 import { handleExplain } from "./explain";
 import { handleGetImage } from "./images";
 import { withCors, handleCorsPreflight } from "./cors";
+import { handleAdminDeleteDocument } from "./documentDeletion";
 import {
   isAdminAuthorized,
   handleAdminDocuments,
@@ -85,6 +86,10 @@ export default {
     if (request.method === "GET" && url.pathname === "/admin/documents") {
       if (!isAdminAuthorized(request, env)) return withCors(Response.json({ error: "Unauthorized" }, { status: 401 }));
       return withCors(await handleAdminDocuments(env));
+    }
+    if (request.method === "DELETE" && url.pathname === "/admin/documents") {
+      if (!isAdminAuthorized(request, env)) return withCors(Response.json({ error: "Unauthorized" }, { status: 401 }));
+      return withCors(await handleAdminDeleteDocument(request, env));
     }
     if (request.method === "GET" && url.pathname === "/admin/documents/cleaned") {
       if (!isAdminAuthorized(request, env)) return withCors(Response.json({ error: "Unauthorized" }, { status: 401 }));
