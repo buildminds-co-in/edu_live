@@ -19,8 +19,13 @@ export async function handleAdminDocuments(env: Env): Promise<Response> {
     // objects are standalone enriched-text artifacts (see pageScreenshot.ts
     // and ingestion.ts) - neither is a source document, so both share this
     // bucket but must not show up as "documents" in the admin list.
+    // question-papers/ holds rendered paper/answer-key PDFs and generated
+    // images - also not source documents.
     const sourceObjects = listed.objects.filter(
-      (obj) => !obj.key.startsWith("page-images/") && !obj.key.startsWith("cleaned/")
+      (obj) =>
+        !obj.key.startsWith("page-images/") &&
+        !obj.key.startsWith("cleaned/") &&
+        !obj.key.startsWith("question-papers/")
     );
 
     const documents = sourceObjects.map((obj) => ({

@@ -418,6 +418,22 @@ details.io-block pre {
 .upload-status-success { color: var(--pill-kept-text); font-weight: 600; }
 .upload-status-error { color: var(--pill-error-text); font-weight: 600; }
 
+.delete-doc-btn {
+  border: 1px solid var(--pill-error-text);
+  background: transparent;
+  color: var(--pill-error-text);
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.25rem 0.65rem;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.delete-doc-btn:hover { background: var(--pill-error-text); color: var(--color-card); }
+.delete-doc-btn:disabled { opacity: 0.5; cursor: wait; }
+.delete-doc-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+#delete-status { margin: 0.5rem 0 0; }
+
 pre.cleaned-text-body {
   white-space: pre-wrap;
   word-break: break-word;

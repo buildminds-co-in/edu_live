@@ -207,6 +207,7 @@ async function loadDocumentsTab() {
           <td>${doc.chunkCount ?? "—"}</td>
           <td>${doc.enriched === null ? "—" : doc.enriched ? "Yes" : "No"}</td>
           <td>${doc.subject ? `Yes (${escapeHtml(doc.subject)})` : "No"}</td>
+          <td><button type="button" class="delete-doc-btn" data-doc-name="${escapeHtml(doc.name)}" data-chunks="${doc.chunkCount ?? 0}">Delete</button></td>
         </tr>`
       )
       .join("");
@@ -249,9 +250,10 @@ async function loadDocumentsTab() {
         <h2>Raw PDFs</h2>
         <p class="txn-meta">The original uploaded PDF files, as stored.</p>
         <table>
-          <thead><tr><th>File</th><th>Size</th><th>Indexed</th><th>Pages</th><th>Chunks</th><th>Enriched</th><th>Question papers</th></tr></thead>
+          <thead><tr><th>File</th><th>Size</th><th>Indexed</th><th>Pages</th><th>Chunks</th><th>Enriched</th><th>Question papers</th><th></th></tr></thead>
           <tbody>${rawRows}</tbody>
         </table>
+        <p id="delete-status" class="txn-meta" role="status"></p>
       </div>
       <div class="card">
         <h2>Cleaned PDFs</h2>
@@ -265,9 +267,45 @@ async function loadDocumentsTab() {
       </div>`;
     wireUploadCard(loadDocumentsTab);
     wireCleanedTextToggles();
+    wireDeleteButtons();
   } catch (err) {
     renderError(el, err.message);
   }
+}
+
+function wireDeleteButtons() {
+  const status = document.getElementById("delete-status");
+  document.querySelectorAll(".delete-doc-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const name = btn.dataset.docName;
+      const confirmed = window.confirm(
+        `Delete "${name}"?\n\n` +
+          `This removes the PDF, its ${btn.dataset.chunks} chunk(s), page screenshots, cleaned text, ` +
+          `and any saved question papers built from it. Students will no longer get answers from it.\n\n` +
+          `This cannot be undone - you would need to upload the PDF again.`
+      );
+      if (!confirmed) return;
+
+      document.querySelectorAll(".delete-doc-btn").forEach((b) => (b.disabled = true));
+      status.textContent = `Deleting ${name}...`;
+      status.classList.remove("upload-status-success", "upload-status-error");
+      try {
+        const response = await fetch(`${WORKER_URL}/admin/documents?name=${encodeURIComponent(name)}`, {
+          method: "DELETE",
+          headers: adminHeaders(),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error ?? `Request failed (${response.status})`);
+        status.textContent = `Deleted ${name}.`;
+        status.classList.add("upload-status-success");
+        setTimeout(loadDocumentsTab, 1500);
+      } catch (err) {
+        status.textContent = `Error: ${err.message}`;
+        status.classList.add("upload-status-error");
+        document.querySelectorAll(".delete-doc-btn").forEach((b) => (b.disabled = false));
+      }
+    });
+  });
 }
 
 function wireCleanedTextToggles() {
