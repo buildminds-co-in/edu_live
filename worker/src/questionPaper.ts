@@ -23,6 +23,14 @@ function errorResponse(routeName: string, err: unknown, status = 500): Response 
   return Response.json({ error: message }, { status });
 }
 
+/**
+ * True for a file named like an answer key: "..._WithAnswers.pdf",
+ * "...WithAnswers.pdf", "Answer Key", "Marking Scheme", "Answers", "Solutions".
+ */
+export function isAnswerKeyFilename(filename: string): boolean {
+  return /with[\s_-]*answers?|answer[\s_-]*key|marking[\s_-]*scheme|(^|[^a-z])(answers|solutions)([^a-z]|$)/i.test(filename);
+}
+
 export async function handleQuestionPaperCatalog(env: Env): Promise<Response> {
   try {
     const listed = await env.PDF_BUCKET.list({ include: ["customMetadata"] });
@@ -112,7 +120,15 @@ export async function handleQuestionPaperGenerate(request: Request, env: Env): P
       return Response.json({ error: `These chapters aren't available: ${missing.join(", ")}` }, { status: 400 });
     }
 
-    const chapterChunkCounts = Object.fromEntries(found.map((c) => [c.filename, c.chunkCount]));
+    // An answer key gives answers, not questions. When it's selected with a
+    // question paper or notes, its text still goes into the prompt (as the
+    // source of answers) but it gets no slots - slots assigned to it were
+    // left unfilled and papers came back short (measured: 32 of 38 questions,
+    // 56 of 80 marks, the whole of section C missing).
+    const slotSources = found.some((c) => !isAnswerKeyFilename(c.filename))
+      ? found.filter((c) => !isAnswerKeyFilename(c.filename))
+      : found;
+    const chapterChunkCounts = Object.fromEntries(slotSources.map((c) => [c.filename, c.chunkCount]));
     const slotsByChapter = distributeSlotsAcrossChapters(blueprint, chapterChunkCounts);
     const chaptersWithSlots = found.map((chunks) => ({ chunks, slots: slotsByChapter[chunks.filename] ?? [] }));
 

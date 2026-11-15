@@ -64,7 +64,7 @@ const MAX_GENERATION_TOKENS = 32000;
 // Part of the question-paper cache key. Bump whenever the generation or
 // answer-key prompts change, so papers cached under the old prompts are
 // regenerated instead of being served from cache.
-export const QUESTION_PAPER_PROMPT_VERSION = "prompt-2026-11-15d";
+export const QUESTION_PAPER_PROMPT_VERSION = "prompt-2026-11-15e";
 
 export function computeGenerationMaxTokens(totalQuestions: number): number {
   return Math.min(MAX_GENERATION_TOKENS, Math.max(MIN_GENERATION_TOKENS, totalQuestions * TOKENS_PER_QUESTION));
