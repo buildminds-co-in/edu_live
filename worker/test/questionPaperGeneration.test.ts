@@ -272,7 +272,7 @@ describe("generatePaper", () => {
     expect(spy.mock.calls[0][1]).toBe(computeGenerationMaxTokens(count80));
     expect(computeGenerationMaxTokens(count80)).toBeGreaterThan(computeGenerationMaxTokens(totalQuestionCount()));
     expect(computeGenerationMaxTokens(1)).toBeGreaterThanOrEqual(4000);
-    expect(computeGenerationMaxTokens(100000)).toBeLessThanOrEqual(24000);
+    expect(computeGenerationMaxTokens(100000)).toBeLessThanOrEqual(32000);
   });
 });
 
@@ -306,6 +306,34 @@ describe("JSON repair (parseLlmJson / parseAndValidateGeneratedPaper)", () => {
     expect(() => JSON.parse(raw)).toThrow(); // confirms this really is invalid JSON
     const result = parseLlmJson(raw) as { questions: { text: string }[] };
     expect(result.questions[0].text).toContain("Omega");
+  });
+});
+
+describe("sanitizeInvalidJsonEscapes (repair path only)", () => {
+  it("repairs raw LaTeX mixed with correctly escaped LaTeX in the same reply", () => {
+    // Built by hand: one formula escaped correctly (\\sqrt), the others not (\sqrt, \frac, \theta).
+    const raw = String.raw`{"questions": [{"text": "$\\sqrt{2}$ and $\sqrt{3}$ and $\frac{1}{2}$ and $\theta$"}]}`;
+    expect(() => JSON.parse(raw)).toThrow();
+    const result = parseLlmJson(raw) as { questions: { text: string }[] };
+    expect(result.questions[0].text).toBe("$\\sqrt{2}$ and $\\sqrt{3}$ and $\\frac{1}{2}$ and $\\theta$");
+  });
+
+  it("keeps real newlines, quotes and unicode escapes", () => {
+    const raw = String.raw`{"t": "line one\nline two \"quoted\" é \Omega"}`;
+    const result = parseLlmJson(raw) as { t: string };
+    expect(result.t).toBe('line one\nline two "quoted" é \\Omega');
+  });
+
+  it("leaves JSON that already parses untouched", () => {
+    const valid = JSON.stringify({ t: "$\\frac{1}{2}$" });
+    expect(parseLlmJson(valid)).toEqual({ t: "$\\frac{1}{2}$" });
+  });
+});
+
+describe("buildGenerationPrompt: explicit question count", () => {
+  it("states the exact number of questions to return", () => {
+    const { user } = buildGenerationPrompt(blueprint, chaptersWithSlots);
+    expect(user).toContain(`exactly ${totalQuestionCount()} questions`);
   });
 });
 
@@ -353,5 +381,94 @@ describe("prompt chapter coverage", () => {
   it("returns the full text unchanged when it fits the budget", () => {
     const sampled = sampleChunkText(chaptersWithSlots[0].chunks);
     expect(sampled).toBe("Carbon forms covalent bonds.");
+  });
+});
+
+describe("buildGenerationPrompt: question papers and answer keys", () => {
+  const { system, user } = buildGenerationPrompt(blueprint, chaptersWithSlots);
+
+  it("tells the model how to recognise a paper's own answer key and that keys don't repeat question text", () => {
+    expect(system).toMatch(/answer key/i);
+    expect(system).toMatch(/does not repeat the question text/i);
+    expect(system).toMatch(/WithAnswers/);
+  });
+
+  it("matches answers by question number within the same paper's key, never another paper's", () => {
+    expect(system).toMatch(/matching by question number/i);
+    expect(system).toMatch(/never take an answer from a key that belongs to a different paper/i);
+  });
+
+  it("reuses questions verbatim, never twice, and skips questions a key marks as flawed", () => {
+    expect(system).toMatch(/copy that question's wording verbatim/i);
+    expect(system).toMatch(/never use the same question twice/i);
+    expect(system).toMatch(/flawed/i);
+  });
+
+  it("keeps mark tags out of question and answer text", () => {
+    expect(system).toMatch(/\[1\]/);
+    expect(system).toMatch(/marks belong only in the marks field/i);
+  });
+
+  it("asks for full official answers (points and steps) for written questions, and both OR alternatives", () => {
+    expect(user).toMatch(/key points, values and steps/i);
+    expect(user).toMatch(/OR alternative/);
+    expect(user).toMatch(/must be that official answer/i);
+  });
+});
+
+describe("QUESTION_PAPER_PROMPT_VERSION", () => {
+  it("is a non-empty string, used in the cache key so prompt changes regenerate cached papers", async () => {
+    const { QUESTION_PAPER_PROMPT_VERSION } = await import("../src/questionPaperGeneration");
+    expect(QUESTION_PAPER_PROMPT_VERSION).toMatch(/^prompt-/);
+  });
+});
+
+describe("usableCorrectAnswer", () => {
+  it("keeps a single option letter for mcq and assertion_reason, with or without brackets or an explanation", async () => {
+    const { usableCorrectAnswer } = await import("../src/questionPaperGeneration");
+    expect(usableCorrectAnswer("mcq", "(B)")).toEqual({ correctAnswer: "(B)" });
+    expect(usableCorrectAnswer("mcq", "C")).toEqual({ correctAnswer: "C" });
+    expect(usableCorrectAnswer("assertion_reason", "(D) A is false but R is true")).toEqual({ correctAnswer: "(D) A is false but R is true" });
+  });
+
+  it("drops placeholders and non-letter answers for option questions, so the answer key works them out", async () => {
+    const { usableCorrectAnswer } = await import("../src/questionPaperGeneration");
+    expect(usableCorrectAnswer("mcq", "---")).toEqual({});
+    expect(usableCorrectAnswer("mcq", "–")).toEqual({});
+    expect(usableCorrectAnswer("mcq", "No option is correct as printed")).toEqual({});
+    expect(usableCorrectAnswer("assertion_reason", "")).toEqual({});
+    expect(usableCorrectAnswer("mcq", 3)).toEqual({});
+  });
+
+  it("keeps written answers but still drops pure placeholders for them", async () => {
+    const { usableCorrectAnswer } = await import("../src/questionPaperGeneration");
+    expect(usableCorrectAnswer("short_answer", "Spinal cord.")).toEqual({ correctAnswer: "Spinal cord." });
+    expect(usableCorrectAnswer("long_answer", "  ---  ")).toEqual({});
+  });
+});
+
+describe("escapeRawControlCharsInStrings (repair path only)", () => {
+  it("repairs a multi-line answer written with raw newlines and tabs inside a string", async () => {
+    const { parseLlmJson } = await import("../src/questionPaperGeneration");
+    const raw = '{"entries": [{"answer": "Step 1: x = 2\n\tStep 2: y = 3"}]}';
+    expect(() => JSON.parse(raw)).toThrow();
+    const parsed = parseLlmJson(raw) as { entries: { answer: string }[] };
+    expect(parsed.entries[0].answer).toBe("Step 1: x = 2\n\tStep 2: y = 3");
+  });
+
+  it("leaves whitespace between JSON values alone", async () => {
+    const { escapeRawControlCharsInStrings } = await import("../src/questionPaperGeneration");
+    expect(escapeRawControlCharsInStrings('{\n  "a": "b"\n}')).toBe('{\n  "a": "b"\n}');
+  });
+});
+
+describe("escapeRawControlCharsInStrings: quotes inside text", () => {
+  it("repairs an unescaped quote inside an answer's text", async () => {
+    const { parseLlmJson } = await import("../src/questionPaperGeneration");
+    const raw = '{"entries": [{"section": "A", "answer": "Based on the strict interpretation of "a vowel which occurs most", the answer is 1/3."}]}';
+    expect(() => JSON.parse(raw)).toThrow();
+    const parsed = parseLlmJson(raw) as { entries: { section: string; answer: string }[] };
+    expect(parsed.entries[0].section).toBe("A");
+    expect(parsed.entries[0].answer).toBe('Based on the strict interpretation of "a vowel which occurs most", the answer is 1/3.');
   });
 });

@@ -2,7 +2,8 @@ import type { Env } from "./index";
 import { checkQueryInScopeAndAgeAppropriate } from "./guardrailCheck";
 import { rerank, workersAiScoreFn, type RetrievedChunk } from "./rerank";
 import { scoreChunksWithJev, filterJevScored, JEV_MODEL_ID, type JevScoredChunk } from "./jev";
-import { buildTransactionTrace, type TransactionTrace } from "./transactionTrace";
+import { buildTransactionTrace } from "./transactionTrace";
+import { recordTransaction } from "./transactionLog";
 import { getRuntimeConfig } from "./config";
 import { generateChatCompletion } from "./llm";
 
@@ -52,6 +53,12 @@ as they appear in the context, delimiters included, in whichever field they land
 "definition", table cells, everything. The app renders this LaTeX as typeset notation, so never strip
 the $ delimiters, rewrite a formula in plain text, or drop the underscores/braces, even inside a table
 cell's JSON string.
+
+Exam papers and answer keys in the context: the context can include question papers and answer keys
+(marking schemes). A question, an answer option, or an assertion or reason statement from a question paper
+is not a fact, since options and assertions are often deliberately wrong - never explain one as true. Take
+facts from notes, explanations and answer keys. Do not include question numbers, mark allocations, step
+marks such as [1] or [½], or tutor-only notes in the explanation.
 
 ${RESPONSE_SCHEMA_INSTRUCTIONS}`;
 }
@@ -160,39 +167,6 @@ function parseExplainLlmResponse(rawText: string, concept: string): ParsedLlmExp
     table: isValidTable(p.table) ? p.table : null,
     realWorldExample: typeof p.realWorldExample === "string" ? p.realWorldExample : null,
   };
-}
-
-async function recordExplainTransaction(env: Env, trace: TransactionTrace): Promise<void> {
-  try {
-    await env.EDU_LIVE_DB.prepare(
-      `INSERT INTO transactions
-        (timestamp, question, provider, model, path_taken, confidence, retrieval_json,
-         llm_input, llm_output, jev_input_json, jev_output_json, input_tokens, output_tokens,
-         jev_cost_usd, llm_cost_usd, jev_model)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-      .bind(
-        trace.timestamp,
-        trace.question,
-        trace.provider,
-        trace.model,
-        trace.pathTaken,
-        trace.confidence,
-        JSON.stringify(trace.retrieval),
-        trace.llmInput,
-        trace.llmOutput,
-        trace.jevInput ? JSON.stringify(trace.jevInput) : null,
-        trace.jevOutput ? JSON.stringify(trace.jevOutput) : null,
-        trace.inputTokens,
-        trace.outputTokens,
-        trace.jevCostUsd,
-        trace.llmCostUsd,
-        trace.jevModel
-      )
-      .run();
-  } catch (err) {
-    console.error("failed to record explain transaction trace", err);
-  }
 }
 
 export async function handleExplain(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -320,7 +294,7 @@ export async function handleExplain(request: Request, env: Env, ctx: ExecutionCo
       outputTokens: generateResult.outputTokens,
       llmCostUsd: generateResult.costUsd,
     });
-    ctx.waitUntil(recordExplainTransaction(env, trace));
+    ctx.waitUntil(recordTransaction(env, { ...trace, groundedIn, retrievalMode: config.explainRetrievalMode }));
 
     const responseBody: ExplainResponseBody = {
       concept: parsed.concept,

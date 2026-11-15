@@ -30,8 +30,17 @@ export async function handleIngest(request: Request, env: Env): Promise<Response
   }
 
   const force = formData.get("force") === "true";
-  const subject = String(formData.get("subject") ?? "");
-  const chapter = String(formData.get("chapter") ?? "");
+  const subject = String(formData.get("subject") ?? "").trim();
+  const chapter = String(formData.get("chapter") ?? "").trim();
+  // A subject makes the document available to question papers, where the
+  // chapter name is its label in the chapter list - so it's required there.
+  // Documents for chat and the explainer only (no subject) don't need one.
+  if (subject && !chapter) {
+    return Response.json(
+      { error: "A chapter name is required for documents included in question papers" },
+      { status: 400 }
+    );
+  }
   const existing = await env.PDF_BUCKET.head(file.name);
   if (existing && !force) {
     return Response.json({ status: "skipped", reason: "already indexed", source: file.name });
@@ -84,7 +93,7 @@ export async function handleIngest(request: Request, env: Env): Promise<Response
   // the R2 customMetadata.enriched flag surfaced in /admin/documents.
   let enrichmentApplied = false;
   if (config.ingestionEnrichmentEnabled) {
-    const enrichedPages = await enrichPdfToMarkdown(pdfBytes, pages, env, config);
+    const enrichedPages = await enrichPdfToMarkdown(pdfBytes, pages, env, config, file.name);
     enrichmentApplied = enrichedPages !== pages;
     pages = enrichedPages;
   }

@@ -1,6 +1,12 @@
 import type { JevScoredChunk } from "./jev";
 
-export type PathTaken = "pdf_only" | "web_fallback" | "concept_explainer";
+export type PathTaken =
+  | "pdf_only"
+  | "web_fallback"
+  | "concept_explainer"
+  | "question_paper"
+  | "answer_key"
+  | "ingestion_enrichment";
 
 export interface RetrievalTraceEntry {
   rank: number;
@@ -30,6 +36,11 @@ export interface TransactionTrace {
   outputTokens: number;
   jevCostUsd: number;
   llmCostUsd: number;
+  // Shown in the dashboard's Transactions tab (migration 0006). Chat sets
+  // answerStyle; the explainer sets groundedIn and retrievalMode.
+  answerStyle?: string | null;
+  groundedIn?: string | null;
+  retrievalMode?: string | null;
 }
 
 const CHARS_PER_TOKEN = 4;

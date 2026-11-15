@@ -74,8 +74,8 @@ function uploadCardHtml() {
         </div>
       </div>
       <div class="upload-row" id="upload-chapter-row">
-        <label for="upload-chapter">Chapter</label>
-        <input type="text" id="upload-chapter" name="chapter" placeholder="e.g. Carbon and its Compounds" />
+        <label for="upload-chapter">Chapter (required)</label>
+        <input type="text" id="upload-chapter" name="chapter" placeholder="e.g. Carbon and its Compounds" required aria-required="true" />
       </div>
       <div class="upload-row">
         <input type="file" id="file-input" accept="application/pdf" />
@@ -126,6 +126,16 @@ function wireUploadCard(onUploaded) {
     const file = fileInput.files[0];
     if (!file) {
       uploadStatus.textContent = "Choose a PDF first.";
+      return;
+    }
+    // The chapter name is what appears in the question-paper chapter list, so
+    // a question-paper document can't be uploaded without one.
+    if (qpEligibleInput.checked && !chapterInput.value.trim()) {
+      uploadStatus.textContent =
+        "Enter a chapter name. It's the name shown when choosing chapters for a question paper.";
+      uploadStatus.classList.remove("upload-status-success");
+      uploadStatus.classList.add("upload-status-error");
+      chapterInput.focus();
       return;
     }
 
@@ -289,68 +299,204 @@ function wireCleanedTextToggles() {
   });
 }
 
-// --- Tab: TransactionTracker ---
+// --- Tab: Transactions ---
+
+const PATH_LABELS = {
+  pdf_only: "Chat",
+  web_fallback: "Chat (web)",
+  concept_explainer: "Explainer",
+  question_paper: "Question paper",
+  answer_key: "Answer key",
+  ingestion_enrichment: "Enrichment",
+};
+const PATH_FILTERS = [
+  ["all", "All"],
+  ["chat", "Chat"],
+  ["concept_explainer", "Explainer"],
+  ["question_paper", "Question papers"],
+  ["answer_key", "Answer keys"],
+  ["ingestion_enrichment", "Enrichment"],
+];
+
+function pathLabel(path) {
+  return PATH_LABELS[path] ?? path ?? "—";
+}
+function pathBadge(path) {
+  return `<span class="path-badge path-${escapeHtml(String(path ?? "unknown"))}">${escapeHtml(pathLabel(path))}</span>`;
+}
+function fmtInt(n) {
+  return n == null ? "—" : Number(n).toLocaleString();
+}
+function fmtTokensShort(n) {
+  if (n == null) return "—";
+  const v = Number(n);
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+  if (v >= 1000) return `${(v / 1000).toFixed(1)}K`;
+  return String(v);
+}
+function fmtUsd(n) {
+  if (n == null) return "—";
+  const v = Number(n);
+  if (v === 0) return "$0";
+  return v < 0.01 ? `$${v.toFixed(4)}` : `$${v.toFixed(2)}`;
+}
+function totalTokens(t) {
+  return Number(t.inputTokens ?? 0) + Number(t.outputTokens ?? 0);
+}
 
 function statusPill(status) {
   return status === "kept" ? `<span class="pill pill-kept">kept</span>` : `<span class="pill pill-discarded">discarded</span>`;
 }
 
 function renderRetrievalTable(retrieval) {
-  if (retrieval.length === 0) return `<p class="txn-meta">No chunks retrieved.</p>`;
   const rows = retrieval
     .map(
       (r) => `
       <tr>
         <td>${r.rank}</td>
-        <td>${escapeHtml(r.source)}</td>
+        <td class="mono">${escapeHtml(r.source)}</td>
         <td>${r.page}</td>
         <td>${r.chunkId}</td>
-        <td>${r.cosineScore.toFixed(4)}</td>
-        <td>${r.rerankScore ?? "—"}</td>
-        <td>${r.jevRelevance ?? "—"}</td>
+        <td class="mono">${Number(r.cosineScore).toFixed(4)}</td>
+        <td class="mono">${r.rerankScore == null ? "—" : Number(r.rerankScore).toFixed(4)}</td>
+        <td class="mono">${r.jevRelevance == null ? "—" : Number(r.jevRelevance).toFixed(2)}</td>
         <td>${statusPill(r.status)}</td>
       </tr>`
     )
     .join("");
   return `
-    <table>
+    <table class="compact-table">
       <thead><tr><th>Rank</th><th>Source</th><th>Page</th><th>Chunk</th><th>Cosine</th><th>Rerank</th><th>JEV</th><th>Status</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
 }
 
-function renderTransactionCard(txn) {
-  return `
-    <details class="card txn-card">
-      <summary class="txn-summary">
-        <span class="txn-summary-question">${escapeHtml(txn.question)}</span>
-        <span class="txn-summary-meta">Query #${txn.id} · ${new Date(txn.timestamp).toLocaleString()} · ${escapeHtml(txn.pathTaken)} · confidence ${txn.confidence != null ? txn.confidence.toFixed(2) : "—"}</span>
-      </summary>
-      <div class="txn-meta">
-        <strong>${escapeHtml(txn.provider)} / ${escapeHtml(txn.model)}</strong>${txn.jevModel ? ` · JEV: <strong>${escapeHtml(txn.jevModel)}</strong>` : ""}
-      </div>
-      <h4>Vector Retrieval results</h4>
-      ${renderRetrievalTable(txn.retrieval)}
-      ${
-        txn.jevInput
-          ? `<details class="io-block"><summary>JEV input</summary><pre>${escapeHtml(JSON.stringify(txn.jevInput, null, 2))}</pre></details>
-             <details class="io-block"><summary>JEV output</summary><pre>${escapeHtml(JSON.stringify(txn.jevOutput, null, 2))}</pre></details>`
-          : ""
-      }
-      <details class="io-block"><summary>LLM input</summary><pre>${escapeHtml(txn.llmInput)}</pre></details>
-      <details class="io-block"><summary>LLM output</summary><pre>${escapeHtml(txn.llmOutput)}</pre></details>
-    </details>`;
+function txnChips(t) {
+  const chips = [
+    ["Path", pathBadge(t.pathTaken)],
+    ["Model", `<span class="mono">${escapeHtml(t.model)}</span>`],
+    ["Tokens", `<span class="mono">${fmtInt(totalTokens(t))}</span> <span class="muted">(in: ${fmtInt(t.inputTokens)}, out: ${fmtInt(t.outputTokens)})</span>`],
+    ["Cost", `<span class="mono">${fmtUsd(t.costUsd)}</span>`],
+  ];
+  if (t.answerStyle) chips.push(["Style", escapeHtml(t.answerStyle)]);
+  if (t.groundedIn) chips.push(["Grounded in", escapeHtml(t.groundedIn)]);
+  if (t.retrievalMode) chips.push(["Retrieval mode", escapeHtml(t.retrievalMode)]);
+  if (t.jevModel) chips.push(["JEV", `<span class="mono">${escapeHtml(t.jevModel)}</span>`]);
+  return `<div class="txn-chips">${chips.map(([k, v]) => `<span class="txn-chip"><span class="k">${k}</span> ${v}</span>`).join("")}</div>`;
 }
 
-async function loadTransactionsTab() {
+function renderTxnDetail(t) {
+  const retrieval = Array.isArray(t.retrieval) ? t.retrieval : [];
+  const kept = retrieval.filter((r) => r.status === "kept").length;
+  let step = 0;
+  const retrievalStep = retrieval.length
+    ? `<div class="txn-step"><h4><span class="step-no">${++step}</span> VectorDB Retrieval &amp; Ranking (${retrieval.length} chunks → ${kept} kept)</h4>${renderRetrievalTable(retrieval)}</div>`
+    : "";
+  const llmStep = `
+    <div class="txn-step">
+      <h4><span class="step-no">${++step}</span> LLM Generation — <span class="mono">${escapeHtml(t.model)}</span> (${fmtInt(totalTokens(t))} tokens)</h4>
+      <div class="io-grid">
+        <div><div class="io-label">Input (context + question)</div><pre class="io-pane">${escapeHtml(t.llmInput || "")}</pre></div>
+        <div class="io-arrow" aria-hidden="true">→</div>
+        <div><div class="io-label">Output (LLM answer)</div><pre class="io-pane">${escapeHtml(t.llmOutput || "")}</pre></div>
+      </div>
+    </div>`;
+  const jevStep = t.jevInput
+    ? `<details class="io-block"><summary>JEV input and output</summary><pre>${escapeHtml(JSON.stringify({ input: t.jevInput, output: t.jevOutput }, null, 2))}</pre></details>`
+    : "";
+  return txnChips(t) + retrievalStep + llmStep + jevStep;
+}
+
+const txnDetailCache = new Map();
+
+async function loadTransactionsTab(state = { limit: 50, filter: "all" }) {
   const el = document.getElementById("tab-transactions");
   renderLoading(el);
   try {
-    const { transactions } = await fetchAdmin("/admin/transactions?limit=3");
-    el.innerHTML =
-      transactions.length === 0
-        ? `<div class="card empty-state">No queries yet.</div>`
-        : transactions.map(renderTransactionCard).join("");
+    const { transactions } = await fetchAdmin(`/admin/transactions/recent?limit=${state.limit}`);
+    const matches = (t) =>
+      state.filter === "all" ||
+      (state.filter === "chat" ? t.pathTaken === "pdf_only" || t.pathTaken === "web_fallback" : t.pathTaken === state.filter);
+    const shown = transactions.filter(matches);
+
+    const filterButtons = PATH_FILTERS.map(
+      ([value, label]) => `<button type="button" class="seg-btn${state.filter === value ? " active" : ""}" data-filter="${value}">${label}</button>`
+    ).join("");
+    const limitOptions = [50, 100, 200]
+      .map((n) => `<option value="${n}"${state.limit === n ? " selected" : ""}>Last ${n}</option>`)
+      .join("");
+
+    const rows = shown
+      .map(
+        (t) => `
+        <tr class="txn-row" data-id="${escapeHtml(String(t.id))}" tabindex="0" aria-expanded="false">
+          <td class="muted nowrap">${escapeHtml(new Date(t.timestamp).toLocaleString())}</td>
+          <td>${pathBadge(t.pathTaken)}</td>
+          <td class="txn-question">${escapeHtml(t.question ?? "")}</td>
+          <td class="mono nowrap">${escapeHtml(t.model ?? "")}</td>
+          <td class="mono nowrap" title="input ${fmtInt(t.inputTokens)} / output ${fmtInt(t.outputTokens)}">${fmtInt(totalTokens(t))} <span class="muted">(${fmtTokensShort(t.inputTokens)} / ${fmtTokensShort(t.outputTokens)})</span></td>
+          <td class="mono nowrap">${fmtUsd(t.costUsd)}</td>
+        </tr>
+        <tr class="txn-detail-row" data-detail-for="${escapeHtml(String(t.id))}" hidden><td colspan="6"><div class="txn-detail"></div></td></tr>`
+      )
+      .join("");
+
+    el.innerHTML = `
+      <div class="card">
+        <div class="tab-toolbar">
+          <h2>Transactions</h2>
+          <div class="seg-group" role="group" aria-label="Filter by feature">${filterButtons}</div>
+          <select id="txn-limit" aria-label="How many transactions">${limitOptions}</select>
+        </div>
+        <p class="txn-meta">Every chat answer, explanation, question paper, answer key and PDF enrichment, newest first. Tokens are total (input / output). Click a row for details.</p>
+        ${
+          shown.length === 0
+            ? `<div class="empty-state">No transactions${state.filter === "all" ? " yet" : " of this kind in the selected range"}.</div>`
+            : `<div class="table-scroll"><table class="compact-table txn-list">
+                <thead><tr><th>Time</th><th>Path</th><th>Question</th><th>Model</th><th>Tokens (in / out)</th><th>Cost</th></tr></thead>
+                <tbody>${rows}</tbody>
+              </table></div>`
+        }
+      </div>`;
+
+    el.querySelectorAll(".seg-btn").forEach((btn) =>
+      btn.addEventListener("click", () => loadTransactionsTab({ ...state, filter: btn.dataset.filter }))
+    );
+    document.getElementById("txn-limit").addEventListener("change", (e) =>
+      loadTransactionsTab({ ...state, limit: Number(e.target.value) })
+    );
+
+    const toggle = async (row) => {
+      const id = row.dataset.id;
+      const detailRow = el.querySelector(`tr[data-detail-for="${CSS.escape(id)}"]`);
+      const open = detailRow.hidden;
+      detailRow.hidden = !open;
+      row.setAttribute("aria-expanded", String(open));
+      row.classList.toggle("open", open);
+      if (!open) return;
+      const box = detailRow.querySelector(".txn-detail");
+      if (txnDetailCache.has(id)) {
+        box.innerHTML = renderTxnDetail(txnDetailCache.get(id));
+        return;
+      }
+      box.innerHTML = `<p class="txn-meta">Loading…</p>`;
+      try {
+        const { transaction } = await fetchAdmin(`/admin/transactions/${encodeURIComponent(id)}`);
+        txnDetailCache.set(id, transaction);
+        box.innerHTML = renderTxnDetail(transaction);
+      } catch (err) {
+        box.innerHTML = `<p class="txn-meta">Could not load this transaction: ${escapeHtml(err.message)}</p>`;
+      }
+    };
+    el.querySelectorAll(".txn-row").forEach((row) => {
+      row.addEventListener("click", () => toggle(row));
+      row.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          toggle(row);
+        }
+      });
+    });
   } catch (err) {
     renderError(el, err.message);
   }
@@ -358,48 +504,135 @@ async function loadTransactionsTab() {
 
 // --- Tab: Costing ---
 
-async function loadCostingTab(range = "1d") {
+const COST_RANGES = [
+  ["all", "All time"],
+  ["2h", "Last 2 hours"],
+  ["1d", "Last 1 day"],
+  ["3d", "Last 3 days"],
+  ["7d", "Last 7 days"],
+  ["30d", "Last 1 month"],
+];
+
+// OpenRouter list prices per 1M tokens (USD), for reference only - the costs
+// shown above them are what OpenRouter reported for each call. Check
+// openrouter.ai/models for current prices.
+const MODEL_PRICING = {
+  "google/gemini-2.5-flash": { name: "Gemini 2.5 Flash", in: 0.3, out: 2.5 },
+  "google/gemini-2.5-pro": { name: "Gemini 2.5 Pro", in: 1.25, out: 10 },
+  "openai/gpt-4o-mini": { name: "GPT-4o Mini", in: 0.15, out: 0.6 },
+  "openai/gpt-4o": { name: "GPT-4o", in: 2.5, out: 10 },
+  "openai/gpt-4.1": { name: "GPT-4.1", in: 2, out: 8 },
+};
+
+function modelDisplayName(model, role) {
+  if (role === "jev") return "JEV relevance check";
+  return MODEL_PRICING[model]?.name ?? model ?? "—";
+}
+function rate(model, key) {
+  const p = MODEL_PRICING[model];
+  return p ? `$${p[key]}/M` : "—";
+}
+
+async function loadCostingTab(range = "7d") {
   const el = document.getElementById("tab-costing");
   renderLoading(el);
   try {
-    const { lastTransaction, summary } = await fetchAdmin(`/admin/costing?range=${range}`);
-    const lastCard = lastTransaction
-      ? `
-        <div class="card">
-          <h2>Tokens used — last transaction</h2>
-          <p class="txn-meta">LLM: <strong>${escapeHtml(lastTransaction.model)}</strong>${lastTransaction.jev_model ? ` · JEV: <strong>${escapeHtml(lastTransaction.jev_model)}</strong>` : ""}</p>
-          <div class="metric-row">
-            <div class="metric"><div class="label">Input tokens (est.)</div><div class="value">${lastTransaction.input_tokens}</div></div>
-            <div class="metric"><div class="label">Output tokens (est.)</div><div class="value">${lastTransaction.output_tokens}</div></div>
-            <div class="metric"><div class="label">LLM cost</div><div class="value">$${lastTransaction.llm_cost_usd.toFixed(5)}</div></div>
-            <div class="metric"><div class="label">JEV cost</div><div class="value">$${lastTransaction.jev_cost_usd.toFixed(5)}</div></div>
-          </div>
-        </div>`
-      : `<div class="card empty-state">No usage recorded yet.</div>`;
+    const data = await fetchAdmin(`/admin/costing?range=${encodeURIComponent(range)}`);
+    const s = data.summary ?? {};
+    const totalCost = Number(s.costUsd ?? 0);
 
-    const summaryCard = `
+    const rangeButtons = COST_RANGES.map(
+      ([value, label]) => `<button type="button" class="seg-btn${data.range === value ? " active" : ""}" data-range="${value}">${label}</button>`
+    ).join("");
+
+    const cards = [
+      ["Total requests", fmtInt(s.requests ?? s.queryCount ?? 0)],
+      ["Total tokens", fmtTokensShort(s.totalTokens ?? 0)],
+      ["Input tokens", fmtTokensShort(s.inputTokens ?? 0)],
+      ["Output tokens", fmtTokensShort(s.outputTokens ?? 0)],
+      ["Estimated cost", fmtUsd(totalCost)],
+    ]
+      .map(([label, value]) => `<div class="cost-card"><div class="label">${label}</div><div class="value mono">${value}</div></div>`)
+      .join("");
+
+    const modelRows = (data.byModel ?? [])
+      .map((m) => {
+        const tokens = m.inputTokens == null ? null : Number(m.inputTokens) + Number(m.outputTokens ?? 0);
+        return `
+        <tr>
+          <td><div class="strong">${escapeHtml(modelDisplayName(m.model, m.role))}</div><div class="mono muted small">${escapeHtml(m.model ?? "")}</div></td>
+          <td>${escapeHtml(m.provider ?? "—")}</td>
+          <td class="mono">${fmtInt(m.requests)}</td>
+          <td class="mono">${fmtTokensShort(tokens)}</td>
+          <td class="mono">${fmtTokensShort(m.inputTokens)}</td>
+          <td class="mono">${fmtTokensShort(m.outputTokens)}</td>
+          <td class="mono">${m.role === "jev" ? "—" : rate(m.model, "in")}</td>
+          <td class="mono">${m.role === "jev" ? "—" : rate(m.model, "out")}</td>
+          <td class="mono strong">${fmtUsd(m.costUsd)}</td>
+        </tr>`;
+      })
+      .join("");
+
+    const featureRows = (data.byFeature ?? [])
+      .map((f) => {
+        const cost = Number(f.costUsd ?? 0);
+        const share = totalCost > 0 ? `${Math.round((cost / totalCost) * 100)}%` : "—";
+        return `
+        <tr>
+          <td>${pathBadge(f.pathTaken)}</td>
+          <td class="mono">${fmtInt(f.requests)}</td>
+          <td class="mono">${fmtTokensShort(Number(f.inputTokens ?? 0) + Number(f.outputTokens ?? 0))}</td>
+          <td class="mono">${fmtTokensShort(f.inputTokens)}</td>
+          <td class="mono">${fmtTokensShort(f.outputTokens)}</td>
+          <td class="mono strong">${fmtUsd(cost)}</td>
+          <td class="mono">${share}</td>
+        </tr>`;
+      })
+      .join("");
+
+    const pricingCards = Object.values(MODEL_PRICING)
+      .map((p) => `<div class="price-card"><div class="strong">${p.name}</div><div class="mono muted small">$${p.in}/M in · $${p.out}/M out</div></div>`)
+      .concat([`<div class="price-card"><div class="strong">Workers AI</div><div class="muted small">Embeddings, reranker, guardrail — included in the Workers plan</div></div>`])
+      .join("");
+
+    const empty = `<div class="empty-state">No usage recorded in this range.</div>`;
+    el.innerHTML = `
       <div class="card">
-        <div class="range-select">
-          <label for="range-picker">Range: </label>
-          <select id="range-picker">
-            <option value="1h" ${range === "1h" ? "selected" : ""}>Last 1 hour</option>
-            <option value="1d" ${range === "1d" ? "selected" : ""}>Last 1 day</option>
-            <option value="7d" ${range === "7d" ? "selected" : ""}>Last 7 days</option>
-          </select>
+        <div class="tab-toolbar">
+          <h2>Costing</h2>
+          <div class="seg-group" role="group" aria-label="Time range">${rangeButtons}</div>
         </div>
-        <h2>Tokens used — ${escapeHtml(range)}</h2>
-        ${lastTransaction ? `<p class="txn-meta">Most recent LLM: <strong>${escapeHtml(lastTransaction.model)}</strong>${lastTransaction.jev_model ? ` · JEV: <strong>${escapeHtml(lastTransaction.jev_model)}</strong>` : ""}</p>` : ""}
-        <div class="metric-row">
-          <div class="metric"><div class="label">Queries</div><div class="value">${summary?.queryCount ?? 0}</div></div>
-          <div class="metric"><div class="label">Input tokens</div><div class="value">${summary?.inputTokens ?? 0}</div></div>
-          <div class="metric"><div class="label">Output tokens</div><div class="value">${summary?.outputTokens ?? 0}</div></div>
-          <div class="metric"><div class="label">LLM cost</div><div class="value">$${(summary?.llmCostUsd ?? 0).toFixed(5)}</div></div>
-          <div class="metric"><div class="label">JEV cost</div><div class="value">$${(summary?.jevCostUsd ?? 0).toFixed(5)}</div></div>
-        </div>
+        <div class="cost-cards">${cards}</div>
+      </div>
+      <div class="card">
+        <h3>By model</h3>
+        ${
+          modelRows
+            ? `<div class="table-scroll"><table class="compact-table">
+                <thead><tr><th>Model</th><th>Provider</th><th>Requests</th><th>Tokens</th><th>Input</th><th>Output</th><th>Input rate</th><th>Output rate</th><th>Est. cost</th></tr></thead>
+                <tbody>${modelRows}</tbody>
+              </table></div>`
+            : empty
+        }
+      </div>
+      <div class="card">
+        <h3>By feature</h3>
+        ${
+          featureRows
+            ? `<div class="table-scroll"><table class="compact-table">
+                <thead><tr><th>Feature</th><th>Requests</th><th>Tokens</th><th>Input</th><th>Output</th><th>Est. cost</th><th>Share</th></tr></thead>
+                <tbody>${featureRows}</tbody>
+              </table></div>`
+            : empty
+        }
+        <p class="txn-meta small">Costs are what OpenRouter reported for each call. Question papers, answer keys and PDF enrichment are recorded from this release on; earlier usage of those features isn't included. Chat token counts are estimates when the provider doesn't report them.</p>
+      </div>
+      <div class="card">
+        <h3>Pricing reference (OpenRouter, per 1M tokens)</h3>
+        <div class="price-cards">${pricingCards}</div>
       </div>`;
 
-    el.innerHTML = lastCard + summaryCard;
-    document.getElementById("range-picker").addEventListener("change", (e) => loadCostingTab(e.target.value));
+    el.querySelectorAll(".seg-btn").forEach((btn) => btn.addEventListener("click", () => loadCostingTab(btn.dataset.range)));
   } catch (err) {
     renderError(el, err.message);
   }
@@ -624,7 +857,7 @@ async function loadSettingsTab() {
 
 const tabLoaders = {
   documents: loadDocumentsTab,
-  transactions: loadTransactionsTab,
+  transactions: () => loadTransactionsTab(),
   costing: () => loadCostingTab(),
   settings: loadSettingsTab,
 };

@@ -7,6 +7,8 @@ import {
   isAdminAuthorized,
   handleAdminDocuments,
   handleAdminTransactions,
+  handleAdminRecentTransactions,
+  handleAdminTransactionDetail,
   handleAdminCosting,
   handleAdminGetConfig,
   handleAdminPutConfig,
@@ -91,6 +93,14 @@ export default {
     if (request.method === "GET" && url.pathname === "/admin/transactions") {
       if (!isAdminAuthorized(request, env)) return withCors(Response.json({ error: "Unauthorized" }, { status: 401 }));
       return withCors(await handleAdminTransactions(request, env));
+    }
+    if (request.method === "GET" && url.pathname === "/admin/transactions/recent") {
+      if (!isAdminAuthorized(request, env)) return withCors(Response.json({ error: "Unauthorized" }, { status: 401 }));
+      return withCors(await handleAdminRecentTransactions(request, env));
+    }
+    if (request.method === "GET" && url.pathname.match(/^\/admin\/transactions\/[^/]+$/)) {
+      if (!isAdminAuthorized(request, env)) return withCors(Response.json({ error: "Unauthorized" }, { status: 401 }));
+      return withCors(await handleAdminTransactionDetail(url.pathname.split("/")[3], env));
     }
     if (request.method === "GET" && url.pathname === "/admin/costing") {
       if (!isAdminAuthorized(request, env)) return withCors(Response.json({ error: "Unauthorized" }, { status: 401 }));
