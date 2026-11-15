@@ -1,6 +1,23 @@
 // Set by env.js from the page's hostname (local / staging / production).
 const WORKER_URL = window.EDU_ENV.workerUrl;
 
+// A source-page image that fails to load (deleted, or a capture that was
+// discarded) is removed instead of leaving an empty box or a broken-image
+// icon under the answer. Image error events don't bubble, so this listens in
+// the capture phase; it covers chat, the explainer and question papers.
+document.addEventListener(
+  "error",
+  (event) => {
+    const img = event.target;
+    if (!(img instanceof HTMLImageElement) || !img.classList.contains("answer-source-image")) return;
+    const parent = img.parentElement;
+    if (img.previousElementSibling?.tagName === "BR") img.previousElementSibling.remove();
+    img.remove();
+    if (parent?.classList.contains("explain-section") && parent.childElementCount === 0) parent.remove();
+  },
+  true
+);
+
 if (new URLSearchParams(window.location.search).has("embed")) {
   document.documentElement.classList.add("embed-mode");
 }
