@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { renderPaperHtml, renderAnswerKeyHtml, renderHtmlToPdf, isFormulaInText } from "../src/questionPaperPdf";
+import { renderPaperHtml, renderAnswerKeyHtml, renderHtmlToPdf, isFormulaInText, renderMathText } from "../src/questionPaperPdf";
 import type { GeneratedPaper } from "../src/questionPaperGeneration";
 import type { AnswerKey } from "../src/questionPaperAnswerKey";
 import type { Env } from "../src/index";
@@ -79,9 +79,11 @@ describe("renderPaperHtml", () => {
     expect(html).toContain("<table>");
     expect(html).toContain("<th>I&lt;x&gt;</th>");
     expect(html).toContain("<td>0.5</td>");
-    // Not in the question text, so shown once as display maths for KaTeX.
-    expect(html).toContain('<div class="qp-formula">$$V = IR &lt; 5$$</div>');
+    // Not in the question text, so shown once, as display maths (MathML).
+    expect(html).toContain('<div class="qp-formula"><span class="katex"><math');
+    expect(html).toContain('display="block"');
     expect(html).not.toContain("qp-latex");
+    expect(html).not.toContain("$$");
     expect(html).toContain(`src="data:image/png;base64,${btoa(String.fromCharCode(1, 2, 3))}"`);
     expect(html).toContain(`src="data:image/png;base64,${btoa(String.fromCharCode(4, 5, 6))}"`);
     // A missing R2 object just omits that image (fails open).
@@ -125,17 +127,52 @@ describe("maths in the PDF (v1.1.4)", () => {
     expect(html.match(/x\^2 - x - 6/g)).toHaveLength(1);
   });
 
-  it("loads KaTeX with the same delimiters as the student app and signals when done", async () => {
+  it("turns $...$ in questions, tables and answers into MathML, with nothing loaded from the network", async () => {
+    const mathPaper: GeneratedPaper = {
+      ...paper,
+      sections: [
+        {
+          section: "A",
+          questions: [
+            {
+              section: "A",
+              questionType: "short_answer",
+              marks: 2,
+              text: "Find $\\frac{1}{2} + \\sqrt{3}$ when x < 5",
+              table: { headers: ["$x_i$"], rows: [["$f_i$"]] },
+            },
+          ],
+        },
+      ],
+    };
+    const key: AnswerKey = { entries: [{ section: "A", questionIndex: 0, answer: "It is $\\frac{1}{2}$ & more" }] };
     for (const html of [
-      await renderPaperHtml(paper, envWithImages({})),
-      await renderAnswerKeyHtml(paper, { entries: [] }, envWithImages({})),
+      await renderPaperHtml(mathPaper, envWithImages({})),
+      await renderAnswerKeyHtml(mathPaper, key, envWithImages({})),
     ]) {
-      expect(html).toContain("KaTeX/0.16.9/katex.min.css");
-      expect(html).toContain("KaTeX/0.16.9/contrib/auto-render.min.js");
-      expect(html).toContain('{left:"$",right:"$",display:false}');
-      expect(html).toContain("window.__mathDone=true");
+      expect(html).toContain("<mfrac>");
+      expect(html).toContain("<msqrt>");
+      expect(html).toContain("<msub>");
+      expect(html).toContain("when x &lt; 5");
+      // No scripts, stylesheets or remote sources (MathML's xmlns is a label, not a fetch).
+      expect(html).not.toMatch(/<script|<link|src="https?:/);
       expect(html).toContain('<meta charset="utf-8">');
     }
+    expect(await renderAnswerKeyHtml(mathPaper, key, envWithImages({}))).toContain(" &amp; more");
+  });
+
+  it("leaves unmatched or empty dollar signs as text, escapes HTML, and renders $$...$$ as display maths", () => {
+    expect(renderMathText("costs $5 <b>")).toBe("costs $5 &lt;b&gt;");
+    expect(renderMathText("empty $$ here")).toBe("empty $$ here");
+    expect(renderMathText("$$a^2$$")).toContain('display="block"');
+    expect(renderMathText("$a^2$")).not.toContain('display="block"');
+    expect(renderMathText(undefined)).toBe("");
+  });
+
+  it("shows the source text of a formula KaTeX can't parse instead of failing", () => {
+    const out = renderMathText("bad $\\frac{1}{$ end");
+    expect(out).toContain("end");
+    expect(out.length).toBeGreaterThan(0);
   });
 });
 

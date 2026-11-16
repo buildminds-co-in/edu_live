@@ -212,8 +212,8 @@ qpGenerateBtn.addEventListener("click", async () => {
   if (qpGenerateBtn.disabled) return;
   qpGenerateBtn.disabled = true;
   const originalLabel = qpGenerateBtn.textContent;
-  qpGenerateBtn.textContent = "Generating...";
-  qpResult.textContent = "Generating...";
+  qpGenerateBtn.textContent = "Generating question paper...";
+  qpResult.textContent = "Generating question paper... this can take up to a minute.";
   try {
     const response = await fetch(`${WORKER_URL}/question-paper/generate`, {
       method: "POST",
@@ -233,6 +233,9 @@ qpGenerateBtn.addEventListener("click", async () => {
 
     const body = await response.json();
     renderQuestionPaper(body.id, body.paper);
+    // The picker and the paper share one scroll area: bring the paper's top
+    // into view so the student starts reading at Section A.
+    qpResult.scrollIntoView({ block: "start", behavior: "smooth" });
   } catch (err) {
     qpResult.textContent = `Could not generate the question paper - could not reach the server (${err.message}).`;
   } finally {
@@ -264,6 +267,28 @@ function renderQuestionItem(q) {
   );
 }
 
+// Answers are numbered the same way as the paper: by section, restarting at 1
+// in each section (the paper's <ol> per section). A single running list made
+// "answer 8" mean Section B question 1. Entries without a matching section
+// (shouldn't happen) are listed at the end rather than dropped.
+function renderAnswersBySection(paper, entries) {
+  const used = new Set();
+  const sectionsHtml = (paper.sections || [])
+    .map((s) => {
+      const items = (s.questions || []).map((_, i) => {
+        const index = entries.findIndex((e) => e.section === s.section && e.questionIndex === i);
+        if (index !== -1) used.add(index);
+        return `<li>${index === -1 ? "—" : escapeHtml(entries[index].answer)}</li>`;
+      });
+      return `<h3>Section ${escapeHtml(s.section)}</h3><ol>${items.join("")}</ol>`;
+    })
+    .join("");
+  const leftovers = entries.filter((_, i) => !used.has(i));
+  return leftovers.length
+    ? `${sectionsHtml}<h3>Other</h3><ol>${leftovers.map((e) => `<li>${escapeHtml(e.answer)}</li>`).join("")}</ol>`
+    : sectionsHtml;
+}
+
 function renderQuestionPaper(paperId, paper) {
   const sectionsHtml = paper.sections
     .map((s) => `<h3>Section ${escapeHtml(s.section)}</h3><ol>${s.questions.map(renderQuestionItem).join("")}</ol>`)
@@ -272,8 +297,8 @@ function renderQuestionPaper(paperId, paper) {
   const encodedId = encodeURIComponent(paperId);
   qpResult.innerHTML =
     `<div class="qp-actions">` +
-    `<a href="${WORKER_URL}/question-paper/${encodedId}/pdf" target="_blank">Download PDF</a>` +
-    `<button type="button" id="qp-answer-key-btn">Generate Answer Key</button>` +
+    `<a href="${WORKER_URL}/question-paper/${encodedId}/pdf" target="_blank">Download Question Paper</a>` +
+    `<button type="button" id="qp-answer-key-btn">Generate Answers</button>` +
     `</div>${sectionsHtml}<div id="qp-answer-key-result"></div>`;
   renderMathIn(qpResult);
 
@@ -283,21 +308,24 @@ function renderQuestionPaper(paperId, paper) {
     const akResult = document.getElementById("qp-answer-key-result");
     answerKeyBtn.disabled = true;
     const originalLabel = answerKeyBtn.textContent;
-    answerKeyBtn.textContent = "Generating answer key...";
-    akResult.textContent = "Generating answer key...";
+    answerKeyBtn.textContent = "Generating answers...";
+    akResult.textContent = "Generating answers... this can take up to two minutes for a long paper.";
+    akResult.scrollIntoView({ block: "nearest", behavior: "smooth" });
     try {
       const response = await fetch(`${WORKER_URL}/question-paper/${encodedId}/answer-key`, { method: "POST" });
       const body = await response.json().catch(() => ({}));
       if (!response.ok || !Array.isArray(body.answerKey?.entries)) {
-        akResult.textContent = body.error || "Could not generate the answer key. Please try again.";
+        akResult.textContent = body.error || "Could not generate the answers. Please try again.";
         return;
       }
       akResult.innerHTML =
-        `<h3>Answer Key</h3><ol>${body.answerKey.entries.map((e) => `<li>${escapeHtml(e.answer)}</li>`).join("")}</ol>` +
-        `<a href="${WORKER_URL}/question-paper/${encodedId}/answer-key-pdf" target="_blank">Download Answer Key PDF</a>`;
+        `<h3 class="qp-answers-title">Answers</h3>` +
+        renderAnswersBySection(paper, body.answerKey.entries) +
+        `<a href="${WORKER_URL}/question-paper/${encodedId}/answer-key-pdf" target="_blank">Download Answers</a>`;
       renderMathIn(akResult);
+      akResult.scrollIntoView({ block: "start", behavior: "smooth" });
     } catch (err) {
-      akResult.textContent = `Could not generate the answer key - could not reach the server (${err.message}).`;
+      akResult.textContent = `Could not generate the answers - could not reach the server (${err.message}).`;
     } finally {
       answerKeyBtn.disabled = false;
       answerKeyBtn.textContent = originalLabel;
@@ -325,6 +353,8 @@ modeButtons.forEach((btn) => {
     answerStyleSelect.style.display = currentMode === "chat" ? "" : "none";
 
     const isQuestionPaper = currentMode === "questionPaper";
+    // Lets the desktop page widen for reading a paper (style.css .qp-mode).
+    document.documentElement.classList.toggle("qp-mode", isQuestionPaper);
     questionPaperPanel.hidden = !isQuestionPaper;
     chatLog.hidden = isQuestionPaper;
     chatForm.hidden = isQuestionPaper;

@@ -3,6 +3,7 @@ import type { Env } from "./index";
 import type { GeneratedPaper, GeneratedQuestion } from "./questionPaperGeneration";
 import type { AnswerKey } from "./questionPaperAnswerKey";
 import { isServableImageKey } from "./images";
+import katex from "katex";
 
 function escapeHtml(text: unknown): string {
   return String(text ?? "")
@@ -20,23 +21,51 @@ const BASE_STYLE =
   "div.qp-formula{margin:6px 0;} " +
   "img.qp-diagram{display:block;max-width:100%;max-height:360px;margin:8px 0;}";
 
-// Same KaTeX build and delimiters as the student app (frontend/index.html,
-// renderMathIn in app.js), so formulas written as $...$ in question text and
-// answers look the same in the PDF as on screen. The inline script sets
-// window.__mathDone when rendering has finished (or KaTeX failed to load);
-// renderHtmlToPdf waits for it but never fails because of it - without KaTeX
-// the PDF still renders, just with the raw $...$ text as before.
-const KATEX_BASE = "https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9";
-const MATH_HEAD =
-  `<link rel="stylesheet" href="${KATEX_BASE}/katex.min.css">` +
-  `<script defer src="${KATEX_BASE}/katex.min.js"></script>` +
-  `<script defer src="${KATEX_BASE}/contrib/auto-render.min.js"></script>` +
-  `<script>window.addEventListener("load",function(){try{if(window.renderMathInElement){` +
-  `window.renderMathInElement(document.body,{delimiters:[{left:"$$",right:"$$",display:true},` +
-  `{left:"$",right:"$",display:false}],throwOnError:false});}}catch(e){}window.__mathDone=true;});</script>`;
-
 function htmlHead(): string {
-  return `<head><meta charset="utf-8"><style>${BASE_STYLE}</style>${MATH_HEAD}</head>`;
+  return `<head><meta charset="utf-8"><style>${BASE_STYLE}</style></head>`;
+}
+
+// Maths in the PDF is converted here, in the Worker, to MathML, which the
+// PDF browser (Chromium) draws natively: no scripts, fonts or downloads are
+// needed inside Browser Rendering. (Loading KaTeX from a CDN in the PDF page
+// was tried first and never ran there.) Same library version and the same
+// $...$ / $$...$$ delimiters as the student app, which renders with KaTeX
+// in the browser. A formula KaTeX can't parse is shown as its source text.
+function texToMathml(tex: string, displayMode: boolean): string {
+  try {
+    return katex.renderToString(tex, { output: "mathml", displayMode, throwOnError: false, strict: "ignore" });
+  } catch {
+    const d = displayMode ? "$$" : "$";
+    return escapeHtml(`${d}${tex}${d}`);
+  }
+}
+
+/** HTML-escapes text and turns $...$ (inline) and $$...$$ (display) into MathML. */
+export function renderMathText(raw: unknown): string {
+  const s = String(raw ?? "");
+  let out = "";
+  let i = 0;
+  while (i < s.length) {
+    if (s[i] === "$") {
+      const delim = s.startsWith("$$", i) ? "$$" : "$";
+      const end = s.indexOf(delim, i + delim.length);
+      const tex = end === -1 ? "" : s.slice(i + delim.length, end);
+      if (end !== -1 && tex.trim() !== "") {
+        out += texToMathml(tex, delim === "$$");
+        i = end + delim.length;
+        continue;
+      }
+      // An unmatched or empty $ is ordinary text (e.g. a price).
+      out += escapeHtml(s[i]);
+      i += 1;
+      continue;
+    }
+    const next = s.indexOf("$", i);
+    const stop = next === -1 ? s.length : next;
+    out += escapeHtml(s.slice(i, stop));
+    i = stop;
+  }
+  return out;
 }
 
 /**
@@ -53,7 +82,7 @@ export function isFormulaInText(text: string, latex: string): boolean {
 
 function renderFormula(q: GeneratedQuestion): string {
   if (!q.latex || isFormulaInText(q.text ?? "", q.latex)) return "";
-  return `<div class="qp-formula">$$${escapeHtml(q.latex)}$$</div>`;
+  return `<div class="qp-formula">${texToMathml(q.latex, true)}</div>`;
 }
 
 function bytesToBase64(buffer: ArrayBuffer): string {
@@ -102,9 +131,9 @@ async function loadImageDataUrls(env: Env, paper: GeneratedPaper): Promise<Map<s
 
 function renderTable(table: GeneratedQuestion["table"]): string {
   if (!table || !Array.isArray(table.headers) || !Array.isArray(table.rows)) return "";
-  const head = `<tr>${table.headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr>`;
+  const head = `<tr>${table.headers.map((h) => `<th>${renderMathText(h)}</th>`).join("")}</tr>`;
   const body = table.rows
-    .map((row) => `<tr>${(Array.isArray(row) ? row : []).map((c) => `<td>${escapeHtml(c)}</td>`).join("")}</tr>`)
+    .map((row) => `<tr>${(Array.isArray(row) ? row : []).map((c) => `<td>${renderMathText(c)}</td>`).join("")}</tr>`)
     .join("");
   return `<table><thead>${head}</thead><tbody>${body}</tbody></table>`;
 }
@@ -114,7 +143,7 @@ function renderQuestionBody(q: GeneratedQuestion, images: Map<string, string>): 
   const key = questionImageKey(q);
   const dataUrl = key ? images.get(key) : undefined;
   const image = dataUrl ? `<img class="qp-diagram" src="${dataUrl}" alt="diagram" />` : "";
-  return `${escapeHtml(q.text)} ${marks}${renderFormula(q)}${renderTable(q.table)}${image}`;
+  return `${renderMathText(q.text)} ${marks}${renderFormula(q)}${renderTable(q.table)}${image}`;
 }
 
 export async function renderPaperHtml(paper: GeneratedPaper, env: Env): Promise<string> {
@@ -143,14 +172,14 @@ export async function renderAnswerKeyHtml(paper: GeneratedPaper, key: AnswerKey,
         `<h2>Section ${escapeHtml(s.section)}</h2><ol>${s.questions
           .map((q, i) => {
             const answer = answerByQuestion.get(`${s.section}:${i}`) ?? "";
-            return `<li>${renderQuestionBody(q, images)}<br/><strong>Answer:</strong> ${escapeHtml(answer)}</li>`;
+            return `<li>${renderQuestionBody(q, images)}<br/><strong>Answer:</strong> ${renderMathText(answer)}</li>`;
           })
           .join("")}</ol>`
     )
     .join("");
 
   return `<html>${htmlHead()}<body>` +
-    `<h1>${escapeHtml(paper.subject)} Answer Key</h1>` +
+    `<h1>${escapeHtml(paper.subject)} Answers (${escapeHtml(paper.marksTotal)} Marks)</h1>` +
     sections +
     `</body></html>`;
 }
@@ -165,15 +194,9 @@ export async function renderHtmlToPdf(env: Env, html: string): Promise<ArrayBuff
   try {
     browser = await puppeteer.launch(env.BROWSER);
     const page = await browser.newPage();
-    // Wait for KaTeX (CSS, fonts, scripts) to load and render the maths. If
-    // the CDN is slow or unreachable, carry on and print what is there: a
-    // PDF with raw $...$ text is better than no PDF.
-    try {
-      await page.setContent(html, { waitUntil: "networkidle0", timeout: 20000 });
-      await page.waitForFunction("window.__mathDone === true", { timeout: 5000 });
-    } catch (err) {
-      console.error("question paper PDF: maths rendering did not finish, printing as is", err);
-    }
+    // Self-contained HTML (maths already MathML, images as data: URLs), so
+    // nothing has to load from the network.
+    await page.setContent(html);
     const pdf = await page.pdf();
     return pdf as unknown as ArrayBuffer;
   } catch (err) {
