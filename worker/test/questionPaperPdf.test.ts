@@ -1,5 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
-import { renderPaperHtml, renderAnswerKeyHtml, renderHtmlToPdf } from "../src/questionPaperPdf";
+import {
+  renderPaperHtml,
+  renderAnswerKeyHtml,
+  renderHtmlToPdf,
+  isFormulaInText,
+  renderMathText,
+  cleanGeneratedText,
+} from "../src/questionPaperPdf";
 import type { GeneratedPaper } from "../src/questionPaperGeneration";
 import type { AnswerKey } from "../src/questionPaperAnswerKey";
 import type { Env } from "../src/index";
@@ -79,7 +86,11 @@ describe("renderPaperHtml", () => {
     expect(html).toContain("<table>");
     expect(html).toContain("<th>I&lt;x&gt;</th>");
     expect(html).toContain("<td>0.5</td>");
-    expect(html).toContain('<pre class="qp-latex">V = IR &lt; 5</pre>');
+    // Not in the question text, so shown once, as display maths (MathML).
+    expect(html).toContain('<div class="qp-formula"><span class="katex"><math');
+    expect(html).toContain('display="block"');
+    expect(html).not.toContain("qp-latex");
+    expect(html).not.toContain("$$");
     expect(html).toContain(`src="data:image/png;base64,${btoa(String.fromCharCode(1, 2, 3))}"`);
     expect(html).toContain(`src="data:image/png;base64,${btoa(String.fromCharCode(4, 5, 6))}"`);
     // A missing R2 object just omits that image (fails open).
@@ -90,6 +101,174 @@ describe("renderPaperHtml", () => {
     const html = await renderPaperHtml(richPaper, envWithImages({}));
     expect(html).toContain("Use &lt;b&gt;Ohm&#39;s&lt;/b&gt; law &amp; the table");
     expect(html).not.toContain("<b>Ohm");
+  });
+});
+
+describe("maths in the PDF (v1.1.4)", () => {
+  it("drops a formula the question text already contains (the prod cases: 2^3 x 3^a ... and tan theta)", () => {
+    expect(
+      isFormulaInText(
+        "If the prime factorisation of 2520 is $2^3 \\times 3^a \\times b \\times 7$, then the value of $a + 2b$ is:",
+        "2^3 \\times 3^a \\times b \\times 7"
+      )
+    ).toBe(true);
+    expect(isFormulaInText("In the given figure, AD = DB, AC = b and AB = a, then tan $\\theta$ is equal to", "\\tan \\theta")).toBe(true);
+    expect(isFormulaInText("Use Ohm's law", "V = IR")).toBe(false);
+    expect(isFormulaInText("anything", "  ")).toBe(true);
+  });
+
+  it("does not print a duplicate formula box", async () => {
+    const dup: GeneratedPaper = {
+      ...paper,
+      sections: [
+        {
+          section: "A",
+          questions: [
+            { section: "A", questionType: "mcq", marks: 1, text: "The zeroes of $p(x) = x^2 - x - 6$ are", latex: "p(x) = x^2 - x - 6" },
+          ],
+        },
+      ],
+    };
+    const html = await renderPaperHtml(dup, envWithImages({}));
+    expect(html).not.toContain('<div class="qp-formula">');
+    expect(html.match(/x\^2 - x - 6/g)).toHaveLength(1);
+  });
+
+  it("turns $...$ in questions, tables and answers into MathML, with nothing loaded from the network", async () => {
+    const mathPaper: GeneratedPaper = {
+      ...paper,
+      sections: [
+        {
+          section: "A",
+          questions: [
+            {
+              section: "A",
+              questionType: "short_answer",
+              marks: 2,
+              text: "Find $\\frac{1}{2} + \\sqrt{3}$ when x < 5",
+              table: { headers: ["$x_i$"], rows: [["$f_i$"]] },
+            },
+          ],
+        },
+      ],
+    };
+    const key: AnswerKey = { entries: [{ section: "A", questionIndex: 0, answer: "It is $\\frac{1}{2}$ & more" }] };
+    for (const html of [
+      await renderPaperHtml(mathPaper, envWithImages({})),
+      await renderAnswerKeyHtml(mathPaper, key, envWithImages({})),
+    ]) {
+      expect(html).toContain("<mfrac>");
+      expect(html).toContain("<msqrt>");
+      expect(html).toContain("<msub>");
+      expect(html).toContain("when x &lt; 5");
+      // No scripts, stylesheets or remote sources (MathML's xmlns is a label, not a fetch).
+      expect(html).not.toMatch(/<script|<link|src="https?:/);
+      expect(html).toContain('<meta charset="utf-8">');
+    }
+    expect(await renderAnswerKeyHtml(mathPaper, key, envWithImages({}))).toContain(" &amp; more");
+  });
+
+  it("leaves unmatched or empty dollar signs as text, escapes HTML, and renders $$...$$ as display maths", () => {
+    expect(renderMathText("costs $5 <b>")).toBe("costs $5 &lt;b&gt;");
+    expect(renderMathText("empty $$ here")).toBe("empty $$ here");
+    expect(renderMathText("$$a^2$$")).toContain('display="block"');
+    expect(renderMathText("$a^2$")).not.toContain('display="block"');
+    expect(renderMathText(undefined)).toBe("");
+  });
+
+  it("turns backslash-n into real line breaks but keeps LaTeX commands starting with \\n (prod Maths 60 answer)", () => {
+    const BS = "\\";
+    const prodLike =
+      `The correct expansion is $1 - 2${BS}sin ${BS}theta$.${BS}nRectification and correct answer:${BS}n` +
+      `$= ${BS}frac{2}{${BS}cos ${BS}theta}$${BS}n(x - 8)(x - 37) = 0${BS}nx = 8 and $a ${BS}neq b$, $${BS}nu$, $${BS}not= 0$`;
+    const out = cleanGeneratedText(prodLike);
+    expect(out).toBe(
+      `The correct expansion is $1 - 2${BS}sin ${BS}theta$.\nRectification and correct answer:\n` +
+        `$= ${BS}frac{2}{${BS}cos ${BS}theta}$\n(x - 8)(x - 37) = 0\nx = 8 and $a ${BS}neq b$, $${BS}nu$, $${BS}not= 0$`
+    );
+    // Rendered: no "\n" left as text, the maths still converts.
+    const html = renderMathText(prodLike);
+    expect(html).not.toContain(`${BS}nRectification`);
+    expect(html).toContain("Rectification and correct answer:\n");
+    expect(html).toContain("<mfrac>");
+  });
+
+  it("cleans real prod answers, and the student app's copy of the clean-up gives the same result", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const read = (p: string) => readFileSync(fileURLToPath(new URL(p, import.meta.url)), "utf8");
+    const fixture = JSON.parse(read("../test-fixtures/question-paper/answers-with-backslash-n.json")) as {
+      entries: { answer: string }[];
+    };
+    // Load cleanGeneratedText from frontend/app.js (the block between its
+    // constants and isFormulaInText) so the two copies can't drift apart.
+    const app = read("../../frontend/app.js");
+    const start = app.indexOf("const LATEX_N_COMMANDS");
+    const end = app.indexOf("function isFormulaInText");
+    expect(start).toBeGreaterThan(-1);
+    const appClean = new Function(`${app.slice(start, end)}; return cleanGeneratedText;`)() as (s: string) => string;
+
+    expect(fixture.entries.length).toBeGreaterThan(0);
+    for (const { answer } of fixture.entries) {
+      expect(answer).toContain("\\n"); // the raw prod text has backslash-n
+      const cleaned = cleanGeneratedText(answer);
+      expect(cleaned).not.toMatch(/\\n(?![a-z])/); // no "\n" left except LaTeX commands
+      expect(cleaned.split("\n").length).toBeGreaterThan(3); // the working is on separate lines
+      expect(appClean(answer)).toBe(cleaned);
+    }
+  });
+
+  it("turns common LaTeX commands written outside $...$ into symbols, and leaves maths and unknown commands alone", () => {
+    const BS = "\\";
+    expect(cleanGeneratedText(`the pool is 34 m ${BS}times 24 m`)).toBe("the pool is 34 m × 24 m");
+    expect(cleanGeneratedText(`If one root is ${BS}alpha, the other is $1/${BS}alpha$`)).toBe(`If one root is α, the other is $1/${BS}alpha$`);
+    expect(cleanGeneratedText(`x ${BS}leq 5 and $a ${BS}times b$`)).toBe(`x ≤ 5 and $a ${BS}times b$`);
+    expect(cleanGeneratedText(`${BS}sqrt{2} and ${BS}timesx`)).toBe(`${BS}sqrt{2} and ${BS}timesx`);
+  });
+
+  it("treats \\n before a roman numeral as a line break (prod: '\\ni. Towards the cell body')", () => {
+    const BS = "\\";
+    expect(cleanGeneratedText(`an electrical impulse.${BS}ni. Towards the cell body${BS}nii. Away`)).toBe(
+      "an electrical impulse.\ni. Towards the cell body\nii. Away"
+    );
+  });
+
+  it("closes inline maths the model left open before a line break (staging Jyoti answer)", () => {
+    const BS = "\\";
+    const raw =
+      `The correct expansion should be $(1 - ${BS}sin ${BS}theta)^2 = 1 - 2${BS}sin ${BS}theta + ${BS}sin^2 ${BS}theta.` +
+      `${BS}nRectification and correct solution:${BS}n$$ ${BS}frac{a}{b} $$${BS}nDone with $x$.`;
+    const lines = cleanGeneratedText(raw).split("\n");
+    expect(lines[0].endsWith(`${BS}sin^2 ${BS}theta.$`)).toBe(true);
+    expect(lines[1]).toBe("Rectification and correct solution:");
+    expect(lines[2]).toBe(`$$ ${BS}frac{a}{b} $$`);
+    expect(lines[3]).toBe("Done with $x$.");
+    // The words are text again, not swallowed into maths.
+    expect(renderMathText(raw)).toContain("Rectification and correct solution:");
+    // A multi-line $$ block is left alone.
+    expect(cleanGeneratedText(`$$a${BS}nb$$`)).toBe("$$a\nb$$");
+  });
+
+  it("treats a formula written with \\text/\\times as a duplicate of the same words in the question", () => {
+    expect(isFormulaInText("In a rectangular park measuring 50 m × 40 m, ...", "50 \\text{ m} \\times 40 \\text{ m}")).toBe(true);
+    // Too short after removing commands: not hidden on a loose match.
+    expect(isFormulaInText("a table about b", "\\frac{a}{b}")).toBe(false);
+  });
+
+  it("renders fractions full size (\\frac as \\dfrac)", () => {
+    expect(renderMathText("$\\frac{a}{b}$")).toContain('displaystyle="true"');
+  });
+
+  it("repairs common mojibake (staging answer: 1184 mÂ²)", () => {
+    expect(cleanGeneratedText("Area = 1184 mÂ², 30Â°, Â½")).toBe("Area = 1184 m², 30°, ½");
+    expect(cleanGeneratedText("2 Ã— 3 âˆ’ 1, itâ€™s")).toBe("2 × 3 − 1, it’s");
+    expect(cleanGeneratedText("Ångström stays")).toBe("Ångström stays");
+  });
+
+  it("shows the source text of a formula KaTeX can't parse instead of failing", () => {
+    const out = renderMathText("bad $\\frac{1}{$ end");
+    expect(out).toContain("end");
+    expect(out.length).toBeGreaterThan(0);
   });
 });
 
@@ -105,7 +284,7 @@ describe("renderAnswerKeyHtml", () => {
     const env = envWithImages({ "question-papers/p1/gen-B-1.png": new Uint8Array([7]) });
     const html = await renderAnswerKeyHtml(richPaper, key, env);
     expect(html).toContain("<table>");
-    expect(html).toContain('<pre class="qp-latex">');
+    expect(html).toContain('<div class="qp-formula">');
     expect(html).toContain("data:image/png;base64,");
     expect(html).toContain("I = V/R &lt;script&gt;");
   });

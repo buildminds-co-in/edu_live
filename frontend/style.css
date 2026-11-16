@@ -166,6 +166,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-primary)
   max-height: 50vh;
   overflow-y: auto;
   margin-bottom: 1rem;
+  /* Keeps KaTeX's absolutely positioned maths copies inside the scroll area
+     (see .question-paper-panel). */
+  position: relative;
 }
 
 .message {
@@ -417,18 +420,32 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-primary)
 }
 
 .question-paper-panel[hidden] { display: none; }
+/* One scroll area for the whole question-paper panel (picker + paper +
+   answers), filling all the height under the tabs on every layout (widget,
+   phone, desktop). Previously the paper had its own small scroll box under a
+   fixed picker, which left most of the screen unused. */
 .question-paper-panel {
   display: flex;
   flex-direction: column;
   gap: 16px;
   flex: 1;
   min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
+  /* Contains KaTeX's absolutely positioned accessibility copies of each
+     formula; without it they escape the scroll area and make the whole page
+     taller (an extra page scrollbar and an empty grey band). */
+  position: relative;
 }
 #qp-result {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding-right: 2px;
+  flex: none;
+}
+/* Standalone page on a large screen: a question paper reads better wider
+   than the 440px chat column. The widget (embed mode) and phones are already
+   full width. */
+@media (min-width: 900px) {
+  html.qp-mode:not(.embed-mode) .app-main { max-width: 820px; }
 }
 .qp-picker { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; flex: 0 0 auto; }
 #qp-chapter-list { max-height: 160px; overflow-y: auto; }
@@ -486,7 +503,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-primary)
 .qp-actions button { height: 38px; padding: 0 1rem; font-size: 0.85rem; }
 #qp-answer-key-result a { display: inline-block; margin-top: 0.5rem; }
 #qp-result img { display: block; max-width: 100%; margin-top: 8px; border-radius: var(--radius-sm); }
-#qp-result .qp-latex { font-family: "IBM Plex Mono", monospace; white-space: pre-wrap; padding: 6px 8px; margin: 6px 0; border: 1px solid var(--color-border); border-radius: var(--radius-sm); overflow-x: auto; }
+#qp-result .qp-formula { margin: 6px 0; max-width: 100%; overflow-x: auto; }
 #qp-result .qp-table { border-collapse: collapse; margin: 8px 0; max-width: 100%; display: block; overflow-x: auto; }
 #qp-result .qp-table th, #qp-result .qp-table td { border: 1px solid var(--color-border); padding: 4px 8px; text-align: left; }
 #qp-generate-btn:disabled, #qp-answer-key-btn:disabled { opacity: 0.6; cursor: progress; }

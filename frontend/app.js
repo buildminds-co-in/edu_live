@@ -1,6 +1,93 @@
 // Set by env.js from the page's hostname (local / staging / production).
 const WORKER_URL = window.EDU_ENV.workerUrl;
 
+// Page images keep their key when a PDF is re-uploaded, and browsers used to
+// cache them for a year. The version query makes browsers fetch images again
+// after a release that needs it (bump it then); the worker ignores it.
+const IMAGE_URL_VERSION = "2026-11-16";
+function imageUrl(key) {
+  return `${WORKER_URL}/images/${encodeURIComponent(key)}?v=${IMAGE_URL_VERSION}`;
+}
+
+// The generator often repeats a formula already in the question text in the
+// optional "latex" field. Skip it when its letters and digits already appear
+// in the text; otherwise show it as rendered maths. Mirrors isFormulaInText in
+// worker/src/questionPaperPdf.ts.
+// Repairs generated question-paper text before display: answer keys come back
+// with line breaks written as the two characters "\" "n", so the working ran
+// together and KaTeX showed red "\n". A "\n" becomes a real line break unless
+// it starts a LaTeX command (\neq, \nu, ...). Also repairs common mojibake
+// ("m\u00C2\u00B2" -> "m\u00B2"). Mirrors cleanGeneratedText in worker/src/questionPaperPdf.ts.
+const LATEX_N_COMMANDS = new Set([
+  "ne", "neq", "nu", "nabla", "not", "notin", "neg", "newline", "nmid", "ngeq", "ngtr", "nleq", "nless",
+  "nexists", "nsubseteq", "nsupseteq", "nparallel", "nleftarrow", "nrightarrow", "natural", "nearrow",
+  "nwarrow", "nolimits", "normalsize", "nobreak", "noindent", "nsim", "ncong",
+]);
+const MOJIBAKE = [
+  [/\u00C2(?=[\u00A0-\u00BF])/g, ""],
+  [/\u00C3\u2014/g, "\u00D7"],
+  [/\u00E2\u02C6\u2019/g, "\u2212"],
+  [/\u00E2\u20AC\u2122/g, "\u2019"],
+  [/\u00E2\u20AC\u0153/g, "\u201C"],
+  [/\u00E2\u20AC\u009D/g, "\u201D"],
+  [/\u00E2\u20AC\u201C/g, "\u2013"],
+  [/\u00E2\u20AC\u201D/g, "\u2014"],
+];
+function cleanGeneratedText(raw) {
+  let s = String(raw ?? "");
+  s = s.replace(/\\n([A-Za-z]*)/g, (match, letters) => (LATEX_N_COMMANDS.has(`n${letters}`) ? match : `\n${letters}`));
+  for (const [pattern, replacement] of MOJIBAKE) s = s.replace(pattern, replacement);
+  s = closeInlineMathPerLine(s);
+  return replaceBareLatexOutsideMath(s);
+}
+// Inline $...$ never spans lines: a line with an odd number of single "$"
+// (the model forgot to close it) gets one closed at its end, only when the
+// unclosed part looks like maths (\command, ^, _ or =), so a money "$" stays
+// text. Lines that open or close a multi-line $$...$$ block are left alone.
+function closeInlineMathPerLine(s) {
+  return s
+    .split("\n")
+    .map((line) => {
+      const displayDelims = (line.match(/\$\$/g) || []).length;
+      if (displayDelims % 2 === 1) return line;
+      const singles = line.replace(/\$\$/g, "  ");
+      if (((singles.match(/\$/g) || []).length) % 2 === 0) return line;
+      const unclosed = singles.slice(singles.lastIndexOf("$") + 1);
+      return /\\[A-Za-z]|[\^_=]/.test(unclosed) ? `${line}$` : line;
+    })
+    .join("\n");
+}
+// Common LaTeX commands written outside $...$ become their symbol (e.g.
+// "34 m \times 24 m"); text inside $...$ is left for KaTeX.
+const BARE_LATEX_SYMBOLS = {
+  times: "\u00D7", div: "\u00F7", pm: "\u00B1", cdot: "\u00B7", alpha: "\u03B1", beta: "\u03B2", gamma: "\u03B3",
+  delta: "\u03B4", Delta: "\u0394", theta: "\u03B8", lambda: "\u03BB", mu: "\u03BC", pi: "\u03C0", rho: "\u03C1",
+  sigma: "\u03C3", omega: "\u03C9", Omega: "\u03A9", phi: "\u03C6", le: "\u2264", leq: "\u2264", ge: "\u2265",
+  geq: "\u2265", ne: "\u2260", neq: "\u2260", approx: "\u2248", infty: "\u221E", degree: "\u00B0",
+  rightarrow: "\u2192", to: "\u2192", Rightarrow: "\u21D2", therefore: "\u2234", because: "\u2235",
+  angle: "\u2220", triangle: "\u25B3", parallel: "\u2225", perp: "\u22A5",
+};
+const MATH_SEGMENT = /(\$\$[\s\S]+?\$\$|\$[^$]+?\$)/;
+function replaceBareLatexOutsideMath(s) {
+  return s
+    .split(MATH_SEGMENT)
+    .map((part, i) =>
+      i % 2 === 1 ? part : part.replace(/\\([A-Za-z]+)(?![A-Za-z])/g, (match, name) => BARE_LATEX_SYMBOLS[name] ?? match)
+    )
+    .join("");
+}
+
+function isFormulaInText(text, latex) {
+  const norm = (s) => String(s ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const formula = norm(latex);
+  if (formula.length === 0 || norm(text).includes(formula)) return true;
+  // Also compare without LaTeX command names ("50 \text{ m} \times 40 \text{ m}"
+  // vs "50 m x 40 m"), only when 5+ letters/digits remain.
+  const noCommands = (s) => norm(String(s ?? "").replace(/\\[A-Za-z]+/g, " "));
+  const bare = noCommands(latex);
+  return bare.length >= 5 && noCommands(text).includes(bare);
+}
+
 // A source-page image that fails to load (deleted, or a capture that was
 // discarded) is removed instead of leaving an empty box or a broken-image
 // icon under the answer. Image error events don't bubble, so this listens in
@@ -63,7 +150,11 @@ let qpCatalogLoading = false;
 // looking the way they do in the source - render that LaTeX in place rather
 // than showing the raw $...$ markup. Operates on existing text nodes only,
 // so it never introduces raw HTML.
-function renderMathIn(el) {
+// Question papers render \frac as \dfrac so fractions inside a line of
+// working aren't small and cramped (same macro as the PDFs).
+const QP_MATH_MACROS = { "\\frac": "\\dfrac" };
+
+function renderMathIn(el, macros) {
   if (window.renderMathInElement) {
     window.renderMathInElement(el, {
       delimiters: [
@@ -71,6 +162,7 @@ function renderMathIn(el) {
         { left: "$", right: "$", display: false },
       ],
       throwOnError: false,
+      ...(macros ? { macros: { ...macros } } : {}),
     });
   }
 }
@@ -194,8 +286,8 @@ qpGenerateBtn.addEventListener("click", async () => {
   if (qpGenerateBtn.disabled) return;
   qpGenerateBtn.disabled = true;
   const originalLabel = qpGenerateBtn.textContent;
-  qpGenerateBtn.textContent = "Generating...";
-  qpResult.textContent = "Generating...";
+  qpGenerateBtn.textContent = "Generating question paper...";
+  qpResult.textContent = "Generating question paper... this can take up to a minute.";
   try {
     const response = await fetch(`${WORKER_URL}/question-paper/generate`, {
       method: "POST",
@@ -215,6 +307,9 @@ qpGenerateBtn.addEventListener("click", async () => {
 
     const body = await response.json();
     renderQuestionPaper(body.id, body.paper);
+    // The picker and the paper share one scroll area: bring the paper's top
+    // into view so the student starts reading at Section A.
+    qpResult.scrollIntoView({ block: "start", behavior: "smooth" });
   } catch (err) {
     qpResult.textContent = `Could not generate the question paper - could not reach the server (${err.message}).`;
   } finally {
@@ -225,9 +320,9 @@ qpGenerateBtn.addEventListener("click", async () => {
 
 function renderQuestionTable(table) {
   if (!table || !Array.isArray(table.headers) || !Array.isArray(table.rows)) return "";
-  const head = `<tr>${table.headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr>`;
+  const head = `<tr>${table.headers.map((h) => `<th>${escapeHtml(cleanGeneratedText(h))}</th>`).join("")}</tr>`;
   const body = table.rows
-    .map((row) => `<tr>${(Array.isArray(row) ? row : []).map((c) => `<td>${escapeHtml(c)}</td>`).join("")}</tr>`)
+    .map((row) => `<tr>${(Array.isArray(row) ? row : []).map((c) => `<td>${escapeHtml(cleanGeneratedText(c))}</td>`).join("")}</tr>`)
     .join("");
   return `<table class="qp-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
 }
@@ -235,14 +330,37 @@ function renderQuestionTable(table) {
 function renderQuestionItem(q) {
   const imageKey = q.pageImageKey || q.generatedImageKey;
   const image = imageKey
-    ? `<img src="${WORKER_URL}/images/${encodeURIComponent(imageKey)}" alt="diagram" class="answer-source-image" />`
+    ? `<img src="${imageUrl(imageKey)}" alt="diagram" class="answer-source-image" />`
     : "";
-  const latex = q.latex ? `<pre class="qp-latex">${escapeHtml(q.latex)}</pre>` : "";
+  const latex =
+    q.latex && !isFormulaInText(q.text, q.latex) ? `<div class="qp-formula">$$${escapeHtml(q.latex)}$$</div>` : "";
   const marks = Number(q.marks);
   return (
-    `<li>${escapeHtml(q.text)} <em>[${escapeHtml(q.marks)} mark${marks === 1 ? "" : "s"}]</em>` +
+    `<li>${escapeHtml(cleanGeneratedText(q.text))} <em>[${escapeHtml(q.marks)} mark${marks === 1 ? "" : "s"}]</em>` +
     `${latex}${renderQuestionTable(q.table)}${image}</li>`
   );
+}
+
+// Answers are numbered the same way as the paper: by section, restarting at 1
+// in each section (the paper's <ol> per section). A single running list made
+// "answer 8" mean Section B question 1. Entries without a matching section
+// (shouldn't happen) are listed at the end rather than dropped.
+function renderAnswersBySection(paper, entries) {
+  const used = new Set();
+  const sectionsHtml = (paper.sections || [])
+    .map((s) => {
+      const items = (s.questions || []).map((_, i) => {
+        const index = entries.findIndex((e) => e.section === s.section && e.questionIndex === i);
+        if (index !== -1) used.add(index);
+        return `<li>${index === -1 ? "\u2014" : escapeHtml(cleanGeneratedText(entries[index].answer))}</li>`;
+      });
+      return `<h3>Section ${escapeHtml(s.section)}</h3><ol>${items.join("")}</ol>`;
+    })
+    .join("");
+  const leftovers = entries.filter((_, i) => !used.has(i));
+  return leftovers.length
+    ? `${sectionsHtml}<h3>Other</h3><ol>${leftovers.map((e) => `<li>${escapeHtml(cleanGeneratedText(e.answer))}</li>`).join("")}</ol>`
+    : sectionsHtml;
 }
 
 function renderQuestionPaper(paperId, paper) {
@@ -253,10 +371,10 @@ function renderQuestionPaper(paperId, paper) {
   const encodedId = encodeURIComponent(paperId);
   qpResult.innerHTML =
     `<div class="qp-actions">` +
-    `<a href="${WORKER_URL}/question-paper/${encodedId}/pdf" target="_blank">Download PDF</a>` +
-    `<button type="button" id="qp-answer-key-btn">Generate Answer Key</button>` +
+    `<a href="${WORKER_URL}/question-paper/${encodedId}/pdf" target="_blank">Download Question Paper</a>` +
+    `<button type="button" id="qp-answer-key-btn">Generate Answers</button>` +
     `</div>${sectionsHtml}<div id="qp-answer-key-result"></div>`;
-  renderMathIn(qpResult);
+  renderMathIn(qpResult, QP_MATH_MACROS);
 
   const answerKeyBtn = document.getElementById("qp-answer-key-btn");
   answerKeyBtn.addEventListener("click", async () => {
@@ -264,21 +382,24 @@ function renderQuestionPaper(paperId, paper) {
     const akResult = document.getElementById("qp-answer-key-result");
     answerKeyBtn.disabled = true;
     const originalLabel = answerKeyBtn.textContent;
-    answerKeyBtn.textContent = "Generating answer key...";
-    akResult.textContent = "Generating answer key...";
+    answerKeyBtn.textContent = "Generating answers...";
+    akResult.textContent = "Generating answers... this can take up to two minutes for a long paper.";
+    akResult.scrollIntoView({ block: "nearest", behavior: "smooth" });
     try {
       const response = await fetch(`${WORKER_URL}/question-paper/${encodedId}/answer-key`, { method: "POST" });
       const body = await response.json().catch(() => ({}));
       if (!response.ok || !Array.isArray(body.answerKey?.entries)) {
-        akResult.textContent = body.error || "Could not generate the answer key. Please try again.";
+        akResult.textContent = body.error || "Could not generate the answers. Please try again.";
         return;
       }
       akResult.innerHTML =
-        `<h3>Answer Key</h3><ol>${body.answerKey.entries.map((e) => `<li>${escapeHtml(e.answer)}</li>`).join("")}</ol>` +
-        `<a href="${WORKER_URL}/question-paper/${encodedId}/answer-key-pdf" target="_blank">Download Answer Key PDF</a>`;
-      renderMathIn(akResult);
+        `<h3 class="qp-answers-title">Answers</h3>` +
+        renderAnswersBySection(paper, body.answerKey.entries) +
+        `<a href="${WORKER_URL}/question-paper/${encodedId}/answer-key-pdf" target="_blank">Download Answers</a>`;
+      renderMathIn(akResult, QP_MATH_MACROS);
+      akResult.scrollIntoView({ block: "start", behavior: "smooth" });
     } catch (err) {
-      akResult.textContent = `Could not generate the answer key - could not reach the server (${err.message}).`;
+      akResult.textContent = `Could not generate the answers - could not reach the server (${err.message}).`;
     } finally {
       answerKeyBtn.disabled = false;
       answerKeyBtn.textContent = originalLabel;
@@ -306,6 +427,8 @@ modeButtons.forEach((btn) => {
     answerStyleSelect.style.display = currentMode === "chat" ? "" : "none";
 
     const isQuestionPaper = currentMode === "questionPaper";
+    // Lets the desktop page widen for reading a paper (style.css .qp-mode).
+    document.documentElement.classList.toggle("qp-mode", isQuestionPaper);
     questionPaperPanel.hidden = !isQuestionPaper;
     chatLog.hidden = isQuestionPaper;
     chatForm.hidden = isQuestionPaper;
@@ -349,7 +472,7 @@ chatForm.addEventListener("submit", async (event) => {
 
       for (const key of imageKeys) {
         const img = document.createElement("img");
-        img.src = `${WORKER_URL}/images/${encodeURIComponent(key)}`;
+        img.src = imageUrl(key);
         img.className = "answer-source-image";
         img.alt = "Source page image";
         thinkingEl.appendChild(document.createElement("br"));
@@ -466,7 +589,7 @@ function renderExplanation(container, result) {
 
   if (result.pageImageKey) {
     const img = document.createElement("img");
-    img.src = `${WORKER_URL}/images/${encodeURIComponent(result.pageImageKey)}`;
+    img.src = imageUrl(result.pageImageKey);
     img.className = "answer-source-image";
     img.alt = "Source page image";
     addSection(null, img);
