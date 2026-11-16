@@ -31,18 +31,91 @@ function htmlHead(): string {
 // was tried first and never ran there.) Same library version and the same
 // $...$ / $$...$$ delimiters as the student app, which renders with KaTeX
 // in the browser. A formula KaTeX can't parse is shown as its source text.
+const FRACTION_MACROS: Record<string, string> = { "\\frac": "\\dfrac" };
+
 function texToMathml(tex: string, displayMode: boolean): string {
   try {
-    return katex.renderToString(tex, { output: "mathml", displayMode, throwOnError: false, strict: "ignore" });
+    // \frac as \dfrac: fractions inside a line of working otherwise render
+    // small and cramped. Same macro as the student app's question papers.
+    return katex.renderToString(tex, {
+      output: "mathml",
+      displayMode,
+      throwOnError: false,
+      strict: "ignore",
+      macros: { ...FRACTION_MACROS },
+    });
   } catch {
     const d = displayMode ? "$$" : "$";
     return escapeHtml(`${d}${tex}${d}`);
   }
 }
 
+// LaTeX commands that start with "\n" - left alone by cleanGeneratedText.
+const LATEX_N_COMMANDS = new Set([
+  "ne", "neq", "nu", "nabla", "not", "notin", "neg", "newline", "nmid", "ngeq", "ngtr", "nleq", "nless",
+  "ni", "nexists", "nsubseteq", "nsupseteq", "nparallel", "nleftarrow", "nrightarrow", "natural", "nearrow",
+  "nwarrow", "nolimits", "normalsize", "nobreak", "noindent", "nsim", "ncong",
+]);
+
+// Character sequences produced when UTF-8 text is decoded as Latin-1/Windows-1252
+// somewhere upstream (seen on staging: "1184 mÂ²" for "1184 m²").
+const MOJIBAKE: [RegExp, string][] = [
+  [/Â(?=[ -¿])/g, ""], // Â² Â° Â½ ... -> ² ° ½
+  [/Ã—/g, "×"], // Ã— -> ×
+  [/âˆ’/g, "−"], // âˆ’ -> −
+  [/â€™/g, "’"], // â€™ -> ’
+  [/â€œ/g, "“"], // â€œ -> “
+  [/â€\u009D/g, "”"], // â€ + 0x9D -> ”
+  [/â€“/g, "–"], // â€“ -> –
+  [/â€”/g, "—"], // â€” -> —
+];
+
+/**
+ * Repairs generated text before display. Answer keys come back with line
+ * breaks written as the two characters "\" "n" (169 in one prod Maths answer
+ * key, zero real breaks), so the working ran together on one line and KaTeX
+ * showed red "\n" errors. A "\n" becomes a real line break unless it starts a
+ * LaTeX command such as \neq or \nu. Also repairs common mojibake. Applied at
+ * display time so papers and answers already saved are fixed too. Mirrored in
+ * frontend/app.js.
+ */
+export function cleanGeneratedText(raw: unknown): string {
+  let s = String(raw ?? "");
+  s = s.replace(/\\n([A-Za-z]*)/g, (match, letters: string) =>
+    LATEX_N_COMMANDS.has(`n${letters}`) ? match : `\n${letters}`
+  );
+  for (const [pattern, replacement] of MOJIBAKE) s = s.replace(pattern, replacement);
+  return replaceBareLatexOutsideMath(s);
+}
+
+// Common LaTeX commands the model sometimes writes outside $...$ (seen:
+// "34 m \times 24 m", "\alpha"). Outside maths they would show as raw text,
+// so they become the plain symbol. Only these exact command names; anything
+// else (e.g. \sqrt{2}, \circ) is left as it is.
+const BARE_LATEX_SYMBOLS: Record<string, string> = {
+  times: "×", div: "÷", pm: "±", cdot: "·", alpha: "α", beta: "β", gamma: "γ",
+  delta: "δ", Delta: "Δ", theta: "θ", lambda: "λ", mu: "μ", pi: "π", rho: "ρ",
+  sigma: "σ", omega: "ω", Omega: "Ω", phi: "φ", le: "≤", leq: "≤", ge: "≥",
+  geq: "≥", ne: "≠", neq: "≠", approx: "≈", infty: "∞", degree: "°",
+  rightarrow: "→", to: "→", Rightarrow: "⇒", therefore: "∴", because: "∵",
+  angle: "∠", triangle: "△", parallel: "∥", perp: "⊥",
+};
+const MATH_SEGMENT = /(\$\$[\s\S]+?\$\$|\$[^$]+?\$)/;
+
+function replaceBareLatexOutsideMath(s: string): string {
+  return s
+    .split(MATH_SEGMENT)
+    .map((part, i) =>
+      i % 2 === 1
+        ? part // a $...$ or $$...$$ segment: left for the maths renderer
+        : part.replace(/\\([A-Za-z]+)(?![A-Za-z])/g, (match, name: string) => BARE_LATEX_SYMBOLS[name] ?? match)
+    )
+    .join("");
+}
+
 /** HTML-escapes text and turns $...$ (inline) and $$...$$ (display) into MathML. */
 export function renderMathText(raw: unknown): string {
-  const s = String(raw ?? "");
+  const s = cleanGeneratedText(raw);
   let out = "";
   let i = 0;
   while (i < s.length) {

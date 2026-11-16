@@ -1,5 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
-import { renderPaperHtml, renderAnswerKeyHtml, renderHtmlToPdf, isFormulaInText, renderMathText } from "../src/questionPaperPdf";
+import {
+  renderPaperHtml,
+  renderAnswerKeyHtml,
+  renderHtmlToPdf,
+  isFormulaInText,
+  renderMathText,
+  cleanGeneratedText,
+} from "../src/questionPaperPdf";
 import type { GeneratedPaper } from "../src/questionPaperGeneration";
 import type { AnswerKey } from "../src/questionPaperAnswerKey";
 import type { Env } from "../src/index";
@@ -167,6 +174,66 @@ describe("maths in the PDF (v1.1.4)", () => {
     expect(renderMathText("$$a^2$$")).toContain('display="block"');
     expect(renderMathText("$a^2$")).not.toContain('display="block"');
     expect(renderMathText(undefined)).toBe("");
+  });
+
+  it("turns backslash-n into real line breaks but keeps LaTeX commands starting with \\n (prod Maths 60 answer)", () => {
+    const BS = "\\";
+    const prodLike =
+      `The correct expansion is $1 - 2${BS}sin ${BS}theta$.${BS}nRectification and correct answer:${BS}n` +
+      `$= ${BS}frac{2}{${BS}cos ${BS}theta}$${BS}n(x - 8)(x - 37) = 0${BS}nx = 8 and $a ${BS}neq b$, $${BS}nu$, $${BS}not= 0$`;
+    const out = cleanGeneratedText(prodLike);
+    expect(out).toBe(
+      `The correct expansion is $1 - 2${BS}sin ${BS}theta$.\nRectification and correct answer:\n` +
+        `$= ${BS}frac{2}{${BS}cos ${BS}theta}$\n(x - 8)(x - 37) = 0\nx = 8 and $a ${BS}neq b$, $${BS}nu$, $${BS}not= 0$`
+    );
+    // Rendered: no "\n" left as text, the maths still converts.
+    const html = renderMathText(prodLike);
+    expect(html).not.toContain(`${BS}nRectification`);
+    expect(html).toContain("Rectification and correct answer:\n");
+    expect(html).toContain("<mfrac>");
+  });
+
+  it("cleans real prod answers, and the student app's copy of the clean-up gives the same result", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const read = (p: string) => readFileSync(fileURLToPath(new URL(p, import.meta.url)), "utf8");
+    const fixture = JSON.parse(read("../test-fixtures/question-paper/answers-with-backslash-n.json")) as {
+      entries: { answer: string }[];
+    };
+    // Load cleanGeneratedText from frontend/app.js (the block between its
+    // constants and isFormulaInText) so the two copies can't drift apart.
+    const app = read("../../frontend/app.js");
+    const start = app.indexOf("const LATEX_N_COMMANDS");
+    const end = app.indexOf("function isFormulaInText");
+    expect(start).toBeGreaterThan(-1);
+    const appClean = new Function(`${app.slice(start, end)}; return cleanGeneratedText;`)() as (s: string) => string;
+
+    expect(fixture.entries.length).toBeGreaterThan(0);
+    for (const { answer } of fixture.entries) {
+      expect(answer).toContain("\\n"); // the raw prod text has backslash-n
+      const cleaned = cleanGeneratedText(answer);
+      expect(cleaned).not.toMatch(/\\n(?![a-z])/); // no "\n" left except LaTeX commands
+      expect(cleaned.split("\n").length).toBeGreaterThan(3); // the working is on separate lines
+      expect(appClean(answer)).toBe(cleaned);
+    }
+  });
+
+  it("turns common LaTeX commands written outside $...$ into symbols, and leaves maths and unknown commands alone", () => {
+    const BS = "\\";
+    expect(cleanGeneratedText(`the pool is 34 m ${BS}times 24 m`)).toBe("the pool is 34 m × 24 m");
+    expect(cleanGeneratedText(`If one root is ${BS}alpha, the other is $1/${BS}alpha$`)).toBe(`If one root is α, the other is $1/${BS}alpha$`);
+    expect(cleanGeneratedText(`x ${BS}leq 5 and $a ${BS}times b$`)).toBe(`x ≤ 5 and $a ${BS}times b$`);
+    expect(cleanGeneratedText(`${BS}sqrt{2} and ${BS}timesx`)).toBe(`${BS}sqrt{2} and ${BS}timesx`);
+  });
+
+  it("renders fractions full size (\\frac as \\dfrac)", () => {
+    expect(renderMathText("$\\frac{a}{b}$")).toContain('displaystyle="true"');
+  });
+
+  it("repairs common mojibake (staging answer: 1184 mÂ²)", () => {
+    expect(cleanGeneratedText("Area = 1184 mÂ², 30Â°, Â½")).toBe("Area = 1184 m², 30°, ½");
+    expect(cleanGeneratedText("2 Ã— 3 âˆ’ 1, itâ€™s")).toBe("2 × 3 − 1, it’s");
+    expect(cleanGeneratedText("Ångström stays")).toBe("Ångström stays");
   });
 
   it("shows the source text of a formula KaTeX can't parse instead of failing", () => {

@@ -6,6 +6,7 @@ declare module "katex" {
     displayMode?: boolean;
     throwOnError?: boolean;
     strict?: boolean | "ignore" | "warn" | "error";
+    macros?: Record<string, string>;
   }
   const katex: {
     renderToString(tex: string, options?: KatexOptions): string;

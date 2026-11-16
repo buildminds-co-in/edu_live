@@ -214,11 +214,11 @@ describe("handleQuestionPaperAnswerKey / handleQuestionPaperPdf", () => {
 
     vi.spyOn(cache, "findPaperById").mockResolvedValue({ ...row, pdfR2Key: paperPdfKey("p1") } as any);
     const current = await handleQuestionPaperPdf(env, "p1");
-    expect(get).toHaveBeenCalledWith("question-papers/p1-r2.pdf");
+    expect(get).toHaveBeenCalledWith("question-papers/p1-r3.pdf");
     expect(current.status).toBe(200);
     expect(await current.text()).toBe("stored-pdf");
 
-    expect(answerKeyPdfKey("p1")).toBe("question-papers/p1-key-r2.pdf");
+    expect(answerKeyPdfKey("p1")).toBe("question-papers/p1-key-r3.pdf");
     vi.restoreAllMocks();
   });
 
