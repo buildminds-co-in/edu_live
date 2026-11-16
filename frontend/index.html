@@ -48,10 +48,9 @@
             <option value="30">30</option>
             <option value="40" selected>40</option>
             <option value="50">50</option>
-            <!-- 60 restored in v1.1.6 (removed in v1.1.5): Maths papers had run out
-                 of output tokens; generation now has a larger budget and one retry.
-                 Staging: Maths 60 used 14,130 of 42,000 tokens. -->
-            <option value="60">60</option>
+            <!-- 60 and 70 removed in v1.1.5. v1.1.6 fixed the cause (Maths ran out of
+                 output tokens; staging Maths 60 used 14,130 of 42,000), but 60 stays
+                 off until the owner has time to test it. -->
           </select>
           <button type="button" id="qp-generate-btn">Generate Question Paper</button>
         </div>
