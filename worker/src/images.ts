@@ -21,6 +21,10 @@ export async function handleGetImage(key: string, env: Env): Promise<Response> {
     return new Response("Not found", { status: 404 });
   }
   return new Response(await object.arrayBuffer(), {
-    headers: { "content-type": "image/png", "cache-control": "public, max-age=31536000, immutable" },
+    // Not "immutable": a page image keeps its key when a PDF is re-uploaded
+    // (force re-ingest), so a year-long cache kept showing old (blank) images.
+    // One hour bounds how long a replaced image can stay stale; the student
+    // app also adds a version query (?v=) to image URLs.
+    headers: { "content-type": "image/png", "cache-control": "public, max-age=3600" },
   });
 }

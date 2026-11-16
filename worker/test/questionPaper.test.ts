@@ -4,6 +4,8 @@ import {
   handleQuestionPaperGenerate,
   handleQuestionPaperAnswerKey,
   handleQuestionPaperPdf,
+  paperPdfKey,
+  answerKeyPdfKey,
 } from "../src/questionPaper";
 import type { Env } from "../src/index";
 import * as cache from "../src/questionPaperCache";
@@ -184,6 +186,39 @@ describe("handleQuestionPaperAnswerKey / handleQuestionPaperPdf", () => {
 
     expect(response.status).toBe(500);
     expect(saveSpy).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+  });
+
+  it("does not serve a PDF stored by an older renderer, and serves one stored by the current renderer", async () => {
+    const row = {
+      id: "p1",
+      cacheKey: "k1",
+      subject: "Maths",
+      marksTotal: 40,
+      chapterFilenames: ["a.pdf"],
+      blueprintVersion: "maths-40-v1",
+      paperJson: { subject: "Maths", marksTotal: 40, blueprintVersion: "v", sections: [] },
+      answerKeyJson: { entries: [] },
+      answerKeyPdfR2Key: null,
+      createdAt: "2026-11-16T00:00:00.000Z",
+    };
+    const get = vi.fn(async () => ({ body: "stored-pdf" }));
+    const env = { ...baseEnv(), PDF_BUCKET: { get, put: vi.fn() }, BROWSER: {} } as unknown as Env;
+
+    // Old name (raw-LaTeX PDF): not read back; a fresh render is attempted
+    // (fails in tests: no Browser Rendering), so the old file is not served.
+    vi.spyOn(cache, "findPaperById").mockResolvedValue({ ...row, pdfR2Key: "question-papers/p1.pdf" } as any);
+    const stale = await handleQuestionPaperPdf(env, "p1");
+    expect(get).not.toHaveBeenCalledWith("question-papers/p1.pdf");
+    expect(stale.status).toBe(500);
+
+    vi.spyOn(cache, "findPaperById").mockResolvedValue({ ...row, pdfR2Key: paperPdfKey("p1") } as any);
+    const current = await handleQuestionPaperPdf(env, "p1");
+    expect(get).toHaveBeenCalledWith("question-papers/p1-r4.pdf");
+    expect(current.status).toBe(200);
+    expect(await current.text()).toBe("stored-pdf");
+
+    expect(answerKeyPdfKey("p1")).toBe("question-papers/p1-key-r4.pdf");
     vi.restoreAllMocks();
   });
 
