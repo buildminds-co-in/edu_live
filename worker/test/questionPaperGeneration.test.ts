@@ -271,8 +271,54 @@ describe("generatePaper", () => {
 
     expect(spy.mock.calls[0][1]).toBe(computeGenerationMaxTokens(count80));
     expect(computeGenerationMaxTokens(count80)).toBeGreaterThan(computeGenerationMaxTokens(totalQuestionCount()));
-    expect(computeGenerationMaxTokens(1)).toBeGreaterThanOrEqual(4000);
-    expect(computeGenerationMaxTokens(100000)).toBeLessThanOrEqual(32000);
+    expect(computeGenerationMaxTokens(1)).toBeGreaterThanOrEqual(12000);
+    expect(computeGenerationMaxTokens(100000)).toBeLessThanOrEqual(60000);
+  });
+
+  it("gives Maths enough room: the prod failures (Maths 20 = 8 questions at 4,776 tokens, Maths 60 = 28 at 16,738) now have headroom", () => {
+    expect(computeGenerationMaxTokens(8)).toBeGreaterThanOrEqual(2 * 4776);
+    expect(computeGenerationMaxTokens(28)).toBeGreaterThanOrEqual(2 * 16738);
+  });
+});
+
+describe("generatePaper retries once when the reply can't be used (v1.1.6)", () => {
+  const cfg = { llmProvider: "openrouter" as const, questionPaperModelSlug: "m", questionPaperImageGenEnabled: false };
+  const good = () => JSON.stringify({ questions: Array.from({ length: totalQuestionCount() }, (_, i) => ({ text: `Q${i}` })) });
+  const cutOff = '{"questions": [{"text": "Q0"}, {"text": "Q1", "correctAnswer": "x = ';
+
+  it("retries with a bigger budget after a cut-off reply", async () => {
+    const spy = vi
+      .spyOn(llm, "generateChatCompletion")
+      .mockResolvedValueOnce({ text: cutOff, provider: "openrouter", model: "x", outputTokens: 4776 })
+      .mockResolvedValueOnce({ text: good(), provider: "openrouter", model: "x" });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const paper = await generatePaper({} as Env, blueprint, chaptersWithSlots, "p1", cfg);
+
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy.mock.calls[1][1]).toBeGreaterThan(spy.mock.calls[0][1] as number);
+    expect(paper.sections.flatMap((s) => s.questions)).toHaveLength(totalQuestionCount());
+  });
+
+  it("gives up after the second unusable reply (GenerationError, no third call)", async () => {
+    const spy = vi
+      .spyOn(llm, "generateChatCompletion")
+      .mockResolvedValue({ text: cutOff, provider: "openrouter", model: "x" });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(generatePaper({} as Env, blueprint, chaptersWithSlots, "p1", cfg)).rejects.toBeInstanceOf(GenerationError);
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it("makes one call when the first reply is fine", async () => {
+    const spy = vi.spyOn(llm, "generateChatCompletion").mockResolvedValue({ text: good(), provider: "openrouter", model: "x" });
+    await generatePaper({} as Env, blueprint, chaptersWithSlots, "p1", cfg);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry when the LLM call itself fails (fail loud, as before)", async () => {
+    const spy = vi.spyOn(llm, "generateChatCompletion").mockRejectedValue(new Error("OpenRouter 500"));
+    await expect(generatePaper({} as Env, blueprint, chaptersWithSlots, "p1", cfg)).rejects.toThrow("OpenRouter 500");
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 });
 
