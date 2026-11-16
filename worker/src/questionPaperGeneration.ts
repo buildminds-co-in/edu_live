@@ -58,9 +58,17 @@ export const MAX_GENERATED_DIAGRAMS = 3;
 // doesn't cost more unless a paid model is configured.
 // Raised from 450/24000 when correctAnswer started carrying the full official
 // answer (points and steps) for 2-5 mark questions, not just a final value.
-const TOKENS_PER_QUESTION = 600;
-const MIN_GENERATION_TOKENS = 4000;
-const MAX_GENERATION_TOKENS = 32000;
+// Raised again from 600/4000/32000 (v1.1.6): Maths papers ran out of room and
+// came back cut off ("incomplete or malformed") - prod: Maths 20 used 4,776 of
+// 4,800, Maths 60 16,738 of 16,800 (worked steps, LaTeX and the model's own
+// reasoning all count as output). Science 20 used 1,764. This is only a
+// ceiling: billing is for tokens actually used. Gemini 2.5 Flash allows about
+// 65k output tokens.
+const TOKENS_PER_QUESTION = 1500;
+const MIN_GENERATION_TOKENS = 12000;
+const MAX_GENERATION_TOKENS = 60000;
+// One retry when the reply can't be parsed, with this much more room.
+const RETRY_BUDGET_FACTOR = 1.5;
 
 // Part of the question-paper cache key. Bump whenever the generation or
 // answer-key prompts change, so papers cached under the old prompts are
@@ -441,29 +449,48 @@ export async function generatePaper(
   const orderedSlots = chapterSlotsInOrder(chaptersWithSlots).map((cs) => cs.slot);
   const totalQuestions = orderedSlots.reduce((sum, s) => sum + s.count, 0);
 
-  const result = await generateChatCompletion(
-    [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ],
-    computeGenerationMaxTokens(totalQuestions),
-    env,
-    { llmProvider: config.llmProvider, llmModelSlug: config.questionPaperModelSlug },
-    { jsonMode: true }
-  );
-  await recordUsage(env, {
-    pathTaken: "question_paper",
-    description: `${blueprint.subject} ${blueprint.marksTotal} marks, ${totalQuestions} questions: ${chaptersWithSlots.map((c) => c.chunks.filename).join(", ")}`,
-    provider: result.provider,
-    model: result.model,
-    inputTokens: result.inputTokens,
-    outputTokens: result.outputTokens,
-    costUsd: result.costUsd,
-    inputSummary: `Blueprint ${blueprint.version}, ${chaptersWithSlots.length} source document(s), prompt ${system.length + user.length} characters`,
-    outputSummary: result.text,
-  });
+  // One retry, with more room, when the reply can't be parsed (cut off or
+  // malformed JSON) - the same "retry once" posture as the answer key. Each
+  // attempt is recorded in transactions so its cost shows in the dashboard.
+  // A failed LLM call itself (HTTP error) still throws immediately.
+  let maxTokens = computeGenerationMaxTokens(totalQuestions);
+  let entries: ParsedEntry[] | null = null;
+  for (let attempt = 1; entries === null; attempt++) {
+    const result = await generateChatCompletion(
+      [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      maxTokens,
+      env,
+      { llmProvider: config.llmProvider, llmModelSlug: config.questionPaperModelSlug },
+      { jsonMode: true }
+    );
+    await recordUsage(env, {
+      pathTaken: "question_paper",
+      description:
+        `${blueprint.subject} ${blueprint.marksTotal} marks, ${totalQuestions} questions: ` +
+        `${chaptersWithSlots.map((c) => c.chunks.filename).join(", ")}${attempt > 1 ? ` (retry ${attempt - 1})` : ""}`,
+      provider: result.provider,
+      model: result.model,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+      costUsd: result.costUsd,
+      inputSummary: `Blueprint ${blueprint.version}, ${chaptersWithSlots.length} source document(s), prompt ${system.length + user.length} characters, max_tokens ${maxTokens}`,
+      outputSummary: result.text,
+    });
 
-  const entries = parseEntries(result.text, orderedSlots);
+    try {
+      entries = parseEntries(result.text, orderedSlots);
+    } catch (err) {
+      if (!(err instanceof GenerationError) || attempt >= 2) throw err;
+      console.error(
+        `question paper generation attempt ${attempt} unusable (${err.message}; ${result.outputTokens ?? "?"} of ${maxTokens} output tokens) - retrying once`
+      );
+      maxTokens = Math.min(MAX_GENERATION_TOKENS, Math.round(maxTokens * RETRY_BUDGET_FACTOR));
+    }
+  }
+  if (!entries) throw new GenerationError("LLM returned no usable question paper"); // unreachable; narrows the type
   const paper = groupIntoPaper(entries, blueprint);
 
   // Diagram imagery (both real ingested textbook screenshots and the
