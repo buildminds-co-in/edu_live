@@ -48,9 +48,11 @@
             <option value="30">30</option>
             <option value="40" selected>40</option>
             <option value="50">50</option>
-            <option value="60">60</option>
+            <!-- 60 removed for now (v1.1.5): Maths 60-mark papers often fail with
+                 "response came back incomplete or malformed". Restore once
+                 generation retries / uses a strict schema (backlog P1). -->
           </select>
-          <button type="button" id="qp-generate-btn">Generate</button>
+          <button type="button" id="qp-generate-btn">Generate Question Paper</button>
         </div>
         <div id="qp-result"></div>
       </div>
