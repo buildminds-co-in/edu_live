@@ -226,6 +226,35 @@ describe("maths in the PDF (v1.1.4)", () => {
     expect(cleanGeneratedText(`${BS}sqrt{2} and ${BS}timesx`)).toBe(`${BS}sqrt{2} and ${BS}timesx`);
   });
 
+  it("treats \\n before a roman numeral as a line break (prod: '\\ni. Towards the cell body')", () => {
+    const BS = "\\";
+    expect(cleanGeneratedText(`an electrical impulse.${BS}ni. Towards the cell body${BS}nii. Away`)).toBe(
+      "an electrical impulse.\ni. Towards the cell body\nii. Away"
+    );
+  });
+
+  it("closes inline maths the model left open before a line break (staging Jyoti answer)", () => {
+    const BS = "\\";
+    const raw =
+      `The correct expansion should be $(1 - ${BS}sin ${BS}theta)^2 = 1 - 2${BS}sin ${BS}theta + ${BS}sin^2 ${BS}theta.` +
+      `${BS}nRectification and correct solution:${BS}n$$ ${BS}frac{a}{b} $$${BS}nDone with $x$.`;
+    const lines = cleanGeneratedText(raw).split("\n");
+    expect(lines[0].endsWith(`${BS}sin^2 ${BS}theta.$`)).toBe(true);
+    expect(lines[1]).toBe("Rectification and correct solution:");
+    expect(lines[2]).toBe(`$$ ${BS}frac{a}{b} $$`);
+    expect(lines[3]).toBe("Done with $x$.");
+    // The words are text again, not swallowed into maths.
+    expect(renderMathText(raw)).toContain("Rectification and correct solution:");
+    // A multi-line $$ block is left alone.
+    expect(cleanGeneratedText(`$$a${BS}nb$$`)).toBe("$$a\nb$$");
+  });
+
+  it("treats a formula written with \\text/\\times as a duplicate of the same words in the question", () => {
+    expect(isFormulaInText("In a rectangular park measuring 50 m × 40 m, ...", "50 \\text{ m} \\times 40 \\text{ m}")).toBe(true);
+    // Too short after removing commands: not hidden on a loose match.
+    expect(isFormulaInText("a table about b", "\\frac{a}{b}")).toBe(false);
+  });
+
   it("renders fractions full size (\\frac as \\dfrac)", () => {
     expect(renderMathText("$\\frac{a}{b}$")).toContain('displaystyle="true"');
   });

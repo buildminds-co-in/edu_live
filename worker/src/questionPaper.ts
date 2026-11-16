@@ -187,11 +187,11 @@ export async function handleQuestionPaperAnswerKey(request: Request, env: Env, p
   }
 }
 
-// Bump when the PDF rendering changes. r3 (v1.1.4): maths as MathML,
+// Bump when the PDF rendering changes. r4 (v1.1.4): maths as MathML,
 // duplicate formula box removed, answer text cleaned (real line breaks,
 // mojibake). PDFs stored under an older name are not served again; they are
 // re-rendered on the next download.
-const PDF_RENDER_VERSION = "r3";
+const PDF_RENDER_VERSION = "r4";
 export const paperPdfKey = (paperId: string) => `question-papers/${paperId}-${PDF_RENDER_VERSION}.pdf`;
 export const answerKeyPdfKey = (paperId: string) => `question-papers/${paperId}-key-${PDF_RENDER_VERSION}.pdf`;
 

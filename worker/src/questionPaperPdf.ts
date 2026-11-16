@@ -53,7 +53,7 @@ function texToMathml(tex: string, displayMode: boolean): string {
 // LaTeX commands that start with "\n" - left alone by cleanGeneratedText.
 const LATEX_N_COMMANDS = new Set([
   "ne", "neq", "nu", "nabla", "not", "notin", "neg", "newline", "nmid", "ngeq", "ngtr", "nleq", "nless",
-  "ni", "nexists", "nsubseteq", "nsupseteq", "nparallel", "nleftarrow", "nrightarrow", "natural", "nearrow",
+  "nexists", "nsubseteq", "nsupseteq", "nparallel", "nleftarrow", "nrightarrow", "natural", "nearrow",
   "nwarrow", "nolimits", "normalsize", "nobreak", "noindent", "nsim", "ncong",
 ]);
 
@@ -85,7 +85,29 @@ export function cleanGeneratedText(raw: unknown): string {
     LATEX_N_COMMANDS.has(`n${letters}`) ? match : `\n${letters}`
   );
   for (const [pattern, replacement] of MOJIBAKE) s = s.replace(pattern, replacement);
+  s = closeInlineMathPerLine(s);
   return replaceBareLatexOutsideMath(s);
+}
+
+// The model sometimes opens inline maths and never closes it before a line
+// break (seen: "... = 1 - 2\sin\theta + \sin^2\theta.\nRectification ..."),
+// so the renderer swallows the following text into maths. Inline $...$ never
+// legitimately spans lines, so a line with an odd number of single "$" gets
+// one closed at its end - but only when the unclosed part looks like maths
+// (a \command, ^, _ or =), so a lone "$" used as money is left as text.
+// Lines that open or close a multi-line $$...$$ block are left alone.
+function closeInlineMathPerLine(s: string): string {
+  return s
+    .split("\n")
+    .map((line) => {
+      const displayDelims = (line.match(/\$\$/g) || []).length;
+      if (displayDelims % 2 === 1) return line;
+      const singles = line.replace(/\$\$/g, "  ");
+      if (((singles.match(/\$/g) || []).length) % 2 === 0) return line;
+      const unclosed = singles.slice(singles.lastIndexOf("$") + 1);
+      return /\\[A-Za-z]|[\^_=]/.test(unclosed) ? `${line}$` : line;
+    })
+    .join("\n");
 }
 
 // Common LaTeX commands the model sometimes writes outside $...$ (seen:
@@ -150,7 +172,13 @@ export function renderMathText(raw: unknown): string {
 export function isFormulaInText(text: string, latex: string): boolean {
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
   const formula = norm(latex);
-  return formula.length === 0 || norm(text).includes(formula);
+  if (formula.length === 0 || norm(text).includes(formula)) return true;
+  // Also compare without LaTeX command names, so "50 \text{ m} \times 40 \text{ m}"
+  // matches "50 m × 40 m" in the text. Only for formulas with enough content
+  // left (5+ letters/digits), so a short one can't match by accident.
+  const noCommands = (s: string) => norm(s.replace(/\\[A-Za-z]+/g, " "));
+  const bare = noCommands(latex);
+  return bare.length >= 5 && noCommands(text).includes(bare);
 }
 
 function renderFormula(q: GeneratedQuestion): string {

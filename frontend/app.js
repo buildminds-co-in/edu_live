@@ -20,7 +20,7 @@ function imageUrl(key) {
 // ("m\u00C2\u00B2" -> "m\u00B2"). Mirrors cleanGeneratedText in worker/src/questionPaperPdf.ts.
 const LATEX_N_COMMANDS = new Set([
   "ne", "neq", "nu", "nabla", "not", "notin", "neg", "newline", "nmid", "ngeq", "ngtr", "nleq", "nless",
-  "ni", "nexists", "nsubseteq", "nsupseteq", "nparallel", "nleftarrow", "nrightarrow", "natural", "nearrow",
+  "nexists", "nsubseteq", "nsupseteq", "nparallel", "nleftarrow", "nrightarrow", "natural", "nearrow",
   "nwarrow", "nolimits", "normalsize", "nobreak", "noindent", "nsim", "ncong",
 ]);
 const MOJIBAKE = [
@@ -37,7 +37,25 @@ function cleanGeneratedText(raw) {
   let s = String(raw ?? "");
   s = s.replace(/\\n([A-Za-z]*)/g, (match, letters) => (LATEX_N_COMMANDS.has(`n${letters}`) ? match : `\n${letters}`));
   for (const [pattern, replacement] of MOJIBAKE) s = s.replace(pattern, replacement);
+  s = closeInlineMathPerLine(s);
   return replaceBareLatexOutsideMath(s);
+}
+// Inline $...$ never spans lines: a line with an odd number of single "$"
+// (the model forgot to close it) gets one closed at its end, only when the
+// unclosed part looks like maths (\command, ^, _ or =), so a money "$" stays
+// text. Lines that open or close a multi-line $$...$$ block are left alone.
+function closeInlineMathPerLine(s) {
+  return s
+    .split("\n")
+    .map((line) => {
+      const displayDelims = (line.match(/\$\$/g) || []).length;
+      if (displayDelims % 2 === 1) return line;
+      const singles = line.replace(/\$\$/g, "  ");
+      if (((singles.match(/\$/g) || []).length) % 2 === 0) return line;
+      const unclosed = singles.slice(singles.lastIndexOf("$") + 1);
+      return /\\[A-Za-z]|[\^_=]/.test(unclosed) ? `${line}$` : line;
+    })
+    .join("\n");
 }
 // Common LaTeX commands written outside $...$ become their symbol (e.g.
 // "34 m \times 24 m"); text inside $...$ is left for KaTeX.
@@ -62,7 +80,12 @@ function replaceBareLatexOutsideMath(s) {
 function isFormulaInText(text, latex) {
   const norm = (s) => String(s ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
   const formula = norm(latex);
-  return formula.length === 0 || norm(text).includes(formula);
+  if (formula.length === 0 || norm(text).includes(formula)) return true;
+  // Also compare without LaTeX command names ("50 \text{ m} \times 40 \text{ m}"
+  // vs "50 m x 40 m"), only when 5+ letters/digits remain.
+  const noCommands = (s) => norm(String(s ?? "").replace(/\\[A-Za-z]+/g, " "));
+  const bare = noCommands(latex);
+  return bare.length >= 5 && noCommands(text).includes(bare);
 }
 
 // A source-page image that fails to load (deleted, or a capture that was
