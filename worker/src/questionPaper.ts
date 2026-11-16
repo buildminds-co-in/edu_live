@@ -187,12 +187,19 @@ export async function handleQuestionPaperAnswerKey(request: Request, env: Env, p
   }
 }
 
+// Bump when the PDF rendering changes (v1.1.4: maths rendered with KaTeX,
+// duplicate formula box removed). PDFs stored under an older name are not
+// served again; they are re-rendered on the next download.
+const PDF_RENDER_VERSION = "r2";
+export const paperPdfKey = (paperId: string) => `question-papers/${paperId}-${PDF_RENDER_VERSION}.pdf`;
+export const answerKeyPdfKey = (paperId: string) => `question-papers/${paperId}-key-${PDF_RENDER_VERSION}.pdf`;
+
 export async function handleQuestionPaperPdf(env: Env, paperId: string): Promise<Response> {
   try {
     const row = await findPaperById(env, paperId);
     if (!row) return Response.json({ error: "Question paper not found" }, { status: 404 });
 
-    if (row.pdfR2Key) {
+    if (row.pdfR2Key && row.pdfR2Key === paperPdfKey(paperId)) {
       const object = await env.PDF_BUCKET.get(row.pdfR2Key);
       if (object) return new Response(object.body, { headers: { "content-type": "application/pdf" } });
     }
@@ -201,7 +208,7 @@ export async function handleQuestionPaperPdf(env: Env, paperId: string): Promise
     const pdf = await renderHtmlToPdf(env, html);
     if (!pdf) return Response.json({ error: "PDF generation failed, paper still available in-chat" }, { status: 500 });
 
-    const key = `question-papers/${paperId}.pdf`;
+    const key = paperPdfKey(paperId);
     await env.PDF_BUCKET.put(key, pdf, { httpMetadata: { contentType: "application/pdf" } });
     await savePdfKey(env, paperId, "pdfR2Key", key);
 
@@ -219,7 +226,7 @@ export async function handleQuestionPaperAnswerKeyPdf(env: Env, paperId: string)
       return Response.json({ error: "Generate the answer key before requesting its PDF" }, { status: 400 });
     }
 
-    if (row.answerKeyPdfR2Key) {
+    if (row.answerKeyPdfR2Key && row.answerKeyPdfR2Key === answerKeyPdfKey(paperId)) {
       const object = await env.PDF_BUCKET.get(row.answerKeyPdfR2Key);
       if (object) return new Response(object.body, { headers: { "content-type": "application/pdf" } });
     }
@@ -228,7 +235,7 @@ export async function handleQuestionPaperAnswerKeyPdf(env: Env, paperId: string)
     const pdf = await renderHtmlToPdf(env, html);
     if (!pdf) return Response.json({ error: "PDF generation failed, answer key still available in-chat" }, { status: 500 });
 
-    const key = `question-papers/${paperId}-key.pdf`;
+    const key = answerKeyPdfKey(paperId);
     await env.PDF_BUCKET.put(key, pdf, { httpMetadata: { contentType: "application/pdf" } });
     await savePdfKey(env, paperId, "answerKeyPdfR2Key", key);
 

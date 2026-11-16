@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { renderPaperHtml, renderAnswerKeyHtml, renderHtmlToPdf } from "../src/questionPaperPdf";
+import { renderPaperHtml, renderAnswerKeyHtml, renderHtmlToPdf, isFormulaInText } from "../src/questionPaperPdf";
 import type { GeneratedPaper } from "../src/questionPaperGeneration";
 import type { AnswerKey } from "../src/questionPaperAnswerKey";
 import type { Env } from "../src/index";
@@ -79,7 +79,9 @@ describe("renderPaperHtml", () => {
     expect(html).toContain("<table>");
     expect(html).toContain("<th>I&lt;x&gt;</th>");
     expect(html).toContain("<td>0.5</td>");
-    expect(html).toContain('<pre class="qp-latex">V = IR &lt; 5</pre>');
+    // Not in the question text, so shown once as display maths for KaTeX.
+    expect(html).toContain('<div class="qp-formula">$$V = IR &lt; 5$$</div>');
+    expect(html).not.toContain("qp-latex");
     expect(html).toContain(`src="data:image/png;base64,${btoa(String.fromCharCode(1, 2, 3))}"`);
     expect(html).toContain(`src="data:image/png;base64,${btoa(String.fromCharCode(4, 5, 6))}"`);
     // A missing R2 object just omits that image (fails open).
@@ -90,6 +92,50 @@ describe("renderPaperHtml", () => {
     const html = await renderPaperHtml(richPaper, envWithImages({}));
     expect(html).toContain("Use &lt;b&gt;Ohm&#39;s&lt;/b&gt; law &amp; the table");
     expect(html).not.toContain("<b>Ohm");
+  });
+});
+
+describe("maths in the PDF (v1.1.4)", () => {
+  it("drops a formula the question text already contains (the prod cases: 2^3 x 3^a ... and tan theta)", () => {
+    expect(
+      isFormulaInText(
+        "If the prime factorisation of 2520 is $2^3 \\times 3^a \\times b \\times 7$, then the value of $a + 2b$ is:",
+        "2^3 \\times 3^a \\times b \\times 7"
+      )
+    ).toBe(true);
+    expect(isFormulaInText("In the given figure, AD = DB, AC = b and AB = a, then tan $\\theta$ is equal to", "\\tan \\theta")).toBe(true);
+    expect(isFormulaInText("Use Ohm's law", "V = IR")).toBe(false);
+    expect(isFormulaInText("anything", "  ")).toBe(true);
+  });
+
+  it("does not print a duplicate formula box", async () => {
+    const dup: GeneratedPaper = {
+      ...paper,
+      sections: [
+        {
+          section: "A",
+          questions: [
+            { section: "A", questionType: "mcq", marks: 1, text: "The zeroes of $p(x) = x^2 - x - 6$ are", latex: "p(x) = x^2 - x - 6" },
+          ],
+        },
+      ],
+    };
+    const html = await renderPaperHtml(dup, envWithImages({}));
+    expect(html).not.toContain('<div class="qp-formula">');
+    expect(html.match(/x\^2 - x - 6/g)).toHaveLength(1);
+  });
+
+  it("loads KaTeX with the same delimiters as the student app and signals when done", async () => {
+    for (const html of [
+      await renderPaperHtml(paper, envWithImages({})),
+      await renderAnswerKeyHtml(paper, { entries: [] }, envWithImages({})),
+    ]) {
+      expect(html).toContain("KaTeX/0.16.9/katex.min.css");
+      expect(html).toContain("KaTeX/0.16.9/contrib/auto-render.min.js");
+      expect(html).toContain('{left:"$",right:"$",display:false}');
+      expect(html).toContain("window.__mathDone=true");
+      expect(html).toContain('<meta charset="utf-8">');
+    }
   });
 });
 
@@ -105,7 +151,7 @@ describe("renderAnswerKeyHtml", () => {
     const env = envWithImages({ "question-papers/p1/gen-B-1.png": new Uint8Array([7]) });
     const html = await renderAnswerKeyHtml(richPaper, key, env);
     expect(html).toContain("<table>");
-    expect(html).toContain('<pre class="qp-latex">');
+    expect(html).toContain('<div class="qp-formula">');
     expect(html).toContain("data:image/png;base64,");
     expect(html).toContain("I = V/R &lt;script&gt;");
   });

@@ -1,6 +1,24 @@
 // Set by env.js from the page's hostname (local / staging / production).
 const WORKER_URL = window.EDU_ENV.workerUrl;
 
+// Page images keep their key when a PDF is re-uploaded, and browsers used to
+// cache them for a year. The version query makes browsers fetch images again
+// after a release that needs it (bump it then); the worker ignores it.
+const IMAGE_URL_VERSION = "2026-11-16";
+function imageUrl(key) {
+  return `${WORKER_URL}/images/${encodeURIComponent(key)}?v=${IMAGE_URL_VERSION}`;
+}
+
+// The generator often repeats a formula already in the question text in the
+// optional "latex" field. Skip it when its letters and digits already appear
+// in the text; otherwise show it as rendered maths. Mirrors isFormulaInText in
+// worker/src/questionPaperPdf.ts.
+function isFormulaInText(text, latex) {
+  const norm = (s) => String(s ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const formula = norm(latex);
+  return formula.length === 0 || norm(text).includes(formula);
+}
+
 // A source-page image that fails to load (deleted, or a capture that was
 // discarded) is removed instead of leaving an empty box or a broken-image
 // icon under the answer. Image error events don't bubble, so this listens in
@@ -235,9 +253,10 @@ function renderQuestionTable(table) {
 function renderQuestionItem(q) {
   const imageKey = q.pageImageKey || q.generatedImageKey;
   const image = imageKey
-    ? `<img src="${WORKER_URL}/images/${encodeURIComponent(imageKey)}" alt="diagram" class="answer-source-image" />`
+    ? `<img src="${imageUrl(imageKey)}" alt="diagram" class="answer-source-image" />`
     : "";
-  const latex = q.latex ? `<pre class="qp-latex">${escapeHtml(q.latex)}</pre>` : "";
+  const latex =
+    q.latex && !isFormulaInText(q.text, q.latex) ? `<div class="qp-formula">$$${escapeHtml(q.latex)}$$</div>` : "";
   const marks = Number(q.marks);
   return (
     `<li>${escapeHtml(q.text)} <em>[${escapeHtml(q.marks)} mark${marks === 1 ? "" : "s"}]</em>` +
@@ -349,7 +368,7 @@ chatForm.addEventListener("submit", async (event) => {
 
       for (const key of imageKeys) {
         const img = document.createElement("img");
-        img.src = `${WORKER_URL}/images/${encodeURIComponent(key)}`;
+        img.src = imageUrl(key);
         img.className = "answer-source-image";
         img.alt = "Source page image";
         thinkingEl.appendChild(document.createElement("br"));
@@ -466,7 +485,7 @@ function renderExplanation(container, result) {
 
   if (result.pageImageKey) {
     const img = document.createElement("img");
-    img.src = `${WORKER_URL}/images/${encodeURIComponent(result.pageImageKey)}`;
+    img.src = imageUrl(result.pageImageKey);
     img.className = "answer-source-image";
     img.alt = "Source page image";
     addSection(null, img);

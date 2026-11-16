@@ -30,6 +30,14 @@ describe("handleGetImage", () => {
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array(pngBytes));
   });
 
+  it("caches images for one hour only, not immutably (keys are reused when a PDF is re-uploaded)", async () => {
+    const env = makeEnv({
+      PDF_BUCKET: { get: async () => ({ arrayBuffer: async () => new Uint8Array([1]).buffer }) } as unknown as R2Bucket,
+    });
+    const response = await handleGetImage("page-images/notes.pdf/3.png", env);
+    expect(response.headers.get("cache-control")).toBe("public, max-age=3600");
+  });
+
   it("returns 404 when the key doesn't exist", async () => {
     const env = makeEnv({ PDF_BUCKET: { get: async () => null } as unknown as R2Bucket });
     const response = await handleGetImage("page-images/missing.pdf/1.png", env);
