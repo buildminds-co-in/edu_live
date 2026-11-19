@@ -31,8 +31,8 @@ npx wrangler dev --persist-to=.wrangler/state   # local dev — cannot emulate V
                                                  # Workers AI, or Browser Rendering; all
                                                  # three hit the real free-tier services
                                                  # even in local dev
-npm run deploy:staging                          # deploy to staging (shared staging account)
-npm run deploy:prod                             # deploy to prod (buildminds). Bare `wrangler deploy`
+npm run deploy:staging                          # deploy Worker AND frontend to staging, tagged (scripts/deploy.js)
+npm run deploy:prod                             # same for prod; only from a clean vX.Y.Z tag. Bare `wrangler deploy`
                                                  # goes to your personal dev name, never prod.
 npx wrangler tail --env production --format pretty   # stream live production logs
 npm run db:check                                # migrations must be additive (no DROP/RENAME)
@@ -51,12 +51,12 @@ From `frontend/`:
 ```bash
 npx serve .          # local static serving; app.js's WORKER_URL const must point at
                       # a reachable worker (local wrangler dev or deployed)
-npx wrangler deploy --env staging      # deploy the frontend to staging
-npx wrangler deploy --env production   # deploy the frontend to prod (BOTH index.html and dashboard.html)
+# Staging/prod frontend deploys go through `npm run deploy:*` in worker/ (tags both)
+# (it deploys BOTH index.html and dashboard.html with the Worker)
 # Environments, data rules, and the migration order: docs/ENVIRONMENTS.md
 ```
 
-**There are two separate deploy targets** (`worker/` and `frontend/`) and no CI/CD — a change to worker code needs `npx wrangler deploy` from `worker/`, a frontend change needs it from `frontend/`. Neither auto-deploys on merge to `main`.
+**There are two deploy targets** (`worker/` and `frontend/`) and no CI/CD. Staging and prod always deploy **both together**, tagged with the same version, via `npm run deploy:staging` / `deploy:prod` (see docs/ENVIRONMENTS.md, "Deploys and version labels"), even if only one changed. Nothing auto-deploys on merge to `main`.
 
 Binding-dependent behavior (ingestion, chat pipeline, screenshot capture) is covered by unit tests with mocked bindings; there is no integration test suite against real Vectorize/Workers AI/Browser Rendering — verify those manually via `wrangler tail` + the deployed app after a deploy.
 
@@ -150,8 +150,8 @@ npx wrangler dev --persist-to=.wrangler/state   # local dev — cannot emulate V
                                                  # Workers AI, or Browser Rendering; all
                                                  # three hit the real free-tier services
                                                  # even in local dev
-npm run deploy:staging                          # deploy to staging (shared staging account)
-npm run deploy:prod                             # deploy to prod (buildminds). Bare `wrangler deploy`
+npm run deploy:staging                          # deploy Worker AND frontend to staging, tagged (scripts/deploy.js)
+npm run deploy:prod                             # same for prod; only from a clean vX.Y.Z tag. Bare `wrangler deploy`
                                                  # goes to your personal dev name, never prod.
 npx wrangler tail --env production --format pretty   # stream live production logs
 npm run db:check                                # migrations must be additive (no DROP/RENAME)
@@ -170,12 +170,12 @@ From `frontend/`:
 ```bash
 npx serve .          # local static serving; app.js's WORKER_URL const must point at
                       # a reachable worker (local wrangler dev or deployed)
-npx wrangler deploy --env staging      # deploy the frontend to staging
-npx wrangler deploy --env production   # deploy the frontend to prod (BOTH index.html and dashboard.html)
+# Staging/prod frontend deploys go through `npm run deploy:*` in worker/ (tags both)
+# (it deploys BOTH index.html and dashboard.html with the Worker)
 # Environments, data rules, and the migration order: docs/ENVIRONMENTS.md
 ```
 
-**There are two separate deploy targets** (`worker/` and `frontend/`) and no CI/CD — a change to worker code needs `npx wrangler deploy` from `worker/`, a frontend change needs it from `frontend/`. Neither auto-deploys on merge to `main`.
+**There are two deploy targets** (`worker/` and `frontend/`) and no CI/CD. Staging and prod always deploy **both together**, tagged with the same version, via `npm run deploy:staging` / `deploy:prod` (see docs/ENVIRONMENTS.md, "Deploys and version labels"), even if only one changed. Nothing auto-deploys on merge to `main`.
 
 Binding-dependent behavior (ingestion, chat pipeline, screenshot capture) is covered by unit tests with mocked bindings; there is no integration test suite against real Vectorize/Workers AI/Browser Rendering — verify those manually via `wrangler tail` + the deployed app after a deploy.
 

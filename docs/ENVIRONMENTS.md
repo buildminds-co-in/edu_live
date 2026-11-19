@@ -61,6 +61,7 @@ Order for every migration:
 3. Apply the migration: `npm run db:migrate:staging`, then later
    `npm run db:migrate:prod`
 4. Deploy the code: `npm run deploy:staging`, then later `npm run deploy:prod`
+   (each deploys the Worker and the frontend; see "Deploys and version labels")
 
 Apply the migration before deploying the code. The old code still runs on the
 new schema, so this order is safe.
@@ -76,6 +77,30 @@ Time Travel covers about 7 days on the free plan.
 - `staging` merges into `main` through a release PR, by buildminds only.
 - `hotfix/<name>` branches from `main`, merges into `main`, and then `main` is
   merged back into `staging`.
+- Merge-back PRs (`main` into `staging`) use **"Create a merge commit"**, never
+  squash. Squashing leaves the release tags out of `staging`'s history, so the
+  next release PR shows already-shipped commits as new.
+
+## Deploys and version labels
+
+Every deploy ships the Worker **and** the frontend together, labelled with the
+same version, so you can always tell what is running:
+
+- `npm run deploy:staging` / `npm run deploy:prod` (from `worker/`) run
+  `worker/scripts/deploy.js`, which deploys the Worker, then the frontend, both
+  with `--tag <version>` and `--message "<version> <env> @ <commit>"`.
+- The version is the release tag when the checkout is exactly on one (`v1.1.6`),
+  otherwise the newest release tag plus the commit (`v1.1.6+39a34a9`), with
+  `-dirty` added for uncommitted changes.
+- **Prod refuses to deploy** unless the checkout is exactly on a release tag
+  with no uncommitted changes: `git switch --detach vX.Y.Z` first.
+- The frontend is deployed even when it has not changed. Wrangler then uploads
+  no files and only records a new version with the same tag. This is what keeps
+  the two in step.
+- Check what is live: `npx wrangler versions list --env production` in
+  `worker/` and in `frontend/`. The newest `Tag` in each must match.
+- Don't run `npx wrangler deploy --env ...` by hand for staging or prod; it
+  skips the tag and deploys only one of the two.
 
 ## One-time setup (not yet done)
 
