@@ -14,6 +14,7 @@ chroma_db/
 app.log
 observability.db
 worker/evals/results/
+worker/evals/reference-papers/
 
 # Misc local artifacts
 .claude.zip

@@ -1,0 +1,228 @@
+{
+  "description": "Client acceptance cases built from the four Edukripa sample papers (Science Test Paper 1 and Maths Paper 1, each with its answer key). Every expected answer comes from the official answer key. Run (from worker/): npm run eval:client -- --worker-url=<worker URL>. The four PDFs must be in evals/reference-papers/ (gitignored) or passed with --reference-dir.",
+  "cases": [
+    {
+      "id": "sci-chat-seeds-koh",
+      "mode": "chat",
+      "docFilename": "Edukripa_Science_Test_Paper_1WithAnswers.pdf",
+      "question": "Germinating seeds are kept in a closed flask with a small tube of KOH solution, and a delivery tube dips into coloured water. Why does the coloured water rise in the tube?",
+      "keyFacts": [
+        "the germinating seeds use up oxygen and release carbon dioxide (respiration)",
+        "the KOH absorbs the carbon dioxide",
+        "so the volume of gas in the flask decreases and the coloured water rises"
+      ],
+      "cheapKeywords": [
+        "oxygen",
+        "carbon dioxide",
+        "KOH"
+      ]
+    },
+    {
+      "id": "sci-chat-heater-resistance",
+      "mode": "chat",
+      "docFilename": "Edukripa_Science_Test_Paper_1WithAnswers.pdf",
+      "question": "An electric heater is rated 1100 W at 220 V. What is the resistance of its heating element when it is working normally?",
+      "keyFacts": [
+        "the current is 5 A (I = P/V = 1100/220), or equivalently R = V²/P",
+        "the resistance is 44 Ω"
+      ],
+      "cheapKeywords": [
+        "44"
+      ]
+    },
+    {
+      "id": "sci-chat-convex-lens",
+      "mode": "chat",
+      "docFilename": "Edukripa_Science_Test_Paper_1WithAnswers.pdf",
+      "question": "A convex lens forms a real image three times the size of the object on a screen placed 60 cm from the lens. Find the object distance and the focal length of the lens.",
+      "keyFacts": [
+        "the object is 20 cm in front of the lens (u = -20 cm)",
+        "the focal length is +15 cm"
+      ],
+      "cheapKeywords": [
+        "20",
+        "15"
+      ]
+    },
+    {
+      "id": "sci-chat-baking-soda-trap",
+      "mode": "chat",
+      "docFilename": "Edukripa_Science_Test_Paper_1WithAnswers.pdf",
+      "question": "Is baking soda a strong base? Why is it used in antacids?",
+      "keyFacts": [
+        "baking soda is NOT a strong base; it is a mild (weak), non-corrosive base",
+        "it is used in antacids because it neutralises excess acid in the stomach"
+      ],
+      "cheapKeywords": [
+        "mild",
+        "acid"
+      ],
+      "note": "Trap: the paper's Reason statement (Q24) says baking soda is a strong base; the key marks it false. The answer must not repeat the false statement as fact."
+    },
+    {
+      "id": "sci-chat-aquatic-breathing-trap",
+      "mode": "chat",
+      "docFilename": "Edukripa_Science_Test_Paper_1WithAnswers.pdf",
+      "question": "Do aquatic organisms breathe faster or slower than terrestrial organisms, and why?",
+      "keyFacts": [
+        "aquatic organisms breathe faster (a higher rate of breathing) than terrestrial organisms",
+        "because the amount of oxygen dissolved in water is much less than the oxygen in air"
+      ],
+      "cheapKeywords": [
+        "faster",
+        "oxygen"
+      ],
+      "note": "Trap: the paper's Assertion (Q9) says aquatic organisms breathe more slowly; the key marks it false."
+    },
+    {
+      "id": "sci-chat-chlor-alkali",
+      "mode": "chat",
+      "docFilename": "Edukripa_Science_Test_Paper_1WithAnswers.pdf",
+      "question": "When electricity is passed through an aqueous solution of common salt, which three products are formed and at which electrode is each obtained?",
+      "keyFacts": [
+        "hydrogen gas is formed at the cathode",
+        "chlorine gas is formed at the anode",
+        "sodium hydroxide is formed near the cathode (in the solution)"
+      ],
+      "cheapKeywords": [
+        "hydrogen",
+        "chlorine",
+        "sodium hydroxide"
+      ]
+    },
+    {
+      "id": "sci-explain-transpiration-pull",
+      "mode": "explain",
+      "docFilename": "Edukripa_Science_Test_Paper_1WithAnswers.pdf",
+      "concept": "how water reaches the top of a tall tree through the xylem (transpiration pull)",
+      "keyFacts": [
+        "xylem carries water and minerals from the roots",
+        "water evaporates from the leaves through stomata (transpiration)",
+        "this creates a suction / transpiration pull that draws a continuous column of water up the xylem"
+      ],
+      "cheapKeywords": [
+        "xylem",
+        "transpiration",
+        "stomata"
+      ]
+    },
+    {
+      "id": "maths-chat-trisection",
+      "mode": "chat",
+      "docFilename": "Edukripa_CBSE10_Maths_Paper1_WithAnswers.pdf",
+      "question": "Find the coordinates of the points of trisection of the line segment joining the points (-2, 2) and (7, -4).",
+      "keyFacts": [
+        "the points of trisection are (1, 0) and (4, -2)"
+      ],
+      "cheapKeywords": [
+        "(1, 0)",
+        "(4, -2)"
+      ]
+    },
+    {
+      "id": "maths-chat-swimming-pool",
+      "mode": "chat",
+      "docFilename": "Edukripa_CBSE10_Maths_Paper1_WithAnswers.pdf",
+      "question": "A rectangular park measures 50 m × 40 m. A rectangular swimming pool in the middle is surrounded by a grass strip of uniform width, and the area of the strip is 1184 m². Find the dimensions of the swimming pool.",
+      "keyFacts": [
+        "the grass strip is 8 m wide",
+        "the swimming pool is 34 m × 24 m"
+      ],
+      "cheapKeywords": [
+        "34",
+        "24"
+      ]
+    },
+    {
+      "id": "maths-chat-jyoti-error",
+      "mode": "chat",
+      "docFilename": "Edukripa_CBSE10_Maths_Paper1_WithAnswers.pdf",
+      "question": "Jyoti simplified cos θ/(1 − sin θ) + (1 − sin θ)/cos θ in her notebook. In which step did she make an error, and what is the correct answer?",
+      "keyFacts": [
+        "the error is in step 2, where she replaced (1 − sin θ)² by cos² θ",
+        "the correct simplified value is 2 sec θ (= 2/cos θ)"
+      ],
+      "cheapKeywords": [
+        "sec"
+      ]
+    },
+    {
+      "id": "maths-explain-mode-grouped",
+      "mode": "explain",
+      "docFilename": "Edukripa_CBSE10_Maths_Paper1_WithAnswers.pdf",
+      "concept": "finding the mode of grouped data",
+      "keyFacts": [
+        "the modal class is the class interval with the highest frequency",
+        "Mode = l + ((f1 − f0) / (2f1 − f0 − f2)) × h, with l the lower limit of the modal class, f1 its frequency, f0 and f2 the frequencies of the classes before and after it, and h the class size"
+      ],
+      "cheapKeywords": [
+        "modal class",
+        "f1"
+      ]
+    },
+    {
+      "id": "qp-science-40",
+      "mode": "questionPaper",
+      "subject": "Science",
+      "chapterFilenames": [
+        "Edukripa_Science_Test_Paper_1.pdf",
+        "Edukripa_Science_Test_Paper_1WithAnswers.pdf"
+      ],
+      "marksTotal": 40,
+      "minMarksTotal": 36,
+      "referenceFiles": [
+        "Edukripa_Science_Test_Paper_1.pdf",
+        "Edukripa_Science_Test_Paper_1WithAnswers.pdf"
+      ],
+      "maxWrongAnswers": 0
+    },
+    {
+      "id": "qp-science-60",
+      "mode": "questionPaper",
+      "subject": "Science",
+      "chapterFilenames": [
+        "Edukripa_Science_Test_Paper_1.pdf",
+        "Edukripa_Science_Test_Paper_1WithAnswers.pdf"
+      ],
+      "marksTotal": 60,
+      "minMarksTotal": 54,
+      "referenceFiles": [
+        "Edukripa_Science_Test_Paper_1.pdf",
+        "Edukripa_Science_Test_Paper_1WithAnswers.pdf"
+      ],
+      "maxWrongAnswers": 0
+    },
+    {
+      "id": "qp-maths-40",
+      "mode": "questionPaper",
+      "subject": "Maths",
+      "chapterFilenames": [
+        "Edukripa_CBSE10_Maths_Paper1.pdf",
+        "Edukripa_CBSE10_Maths_Paper1_WithAnswers.pdf"
+      ],
+      "marksTotal": 40,
+      "minMarksTotal": 36,
+      "referenceFiles": [
+        "Edukripa_CBSE10_Maths_Paper1.pdf",
+        "Edukripa_CBSE10_Maths_Paper1_WithAnswers.pdf"
+      ],
+      "maxWrongAnswers": 0
+    },
+    {
+      "id": "qp-maths-60",
+      "mode": "questionPaper",
+      "subject": "Maths",
+      "chapterFilenames": [
+        "Edukripa_CBSE10_Maths_Paper1.pdf",
+        "Edukripa_CBSE10_Maths_Paper1_WithAnswers.pdf"
+      ],
+      "marksTotal": 60,
+      "minMarksTotal": 54,
+      "referenceFiles": [
+        "Edukripa_CBSE10_Maths_Paper1.pdf",
+        "Edukripa_CBSE10_Maths_Paper1_WithAnswers.pdf"
+      ],
+      "maxWrongAnswers": 0
+    }
+  ]
+}
