@@ -30,7 +30,27 @@
 // --admin-key       Falls back to ADMIN_API_KEY from the environment or
 //                   worker/.dev.vars.
 // --out-dir         Defaults to evals/results/ (gitignored).
-// --case=id1,id2    Run only the listed case ids from golden-cases.json.
+// --case=id1,id2    Run only the listed case ids from the cases file.
+// --suite=NAME      Which suite to run: "golden" (default, golden-cases.json)
+//                   or "client" (client-papers-cases.json: the client's
+//                   official Science and Maths papers). Shortcuts:
+//                   npm run eval:golden / npm run eval:client.
+// --cases=FILE      Any other cases file (overrides --suite).
+// --reference-dir   Folder holding the official PDFs named in a
+//                   questionPaper case's "referenceFiles" (or set
+//                   EVAL_REFERENCE_DIR). Default: evals/reference-papers/
+//                   (gitignored - the client's PDFs are not committed).
+// --reference-judge-model  Model for the reference check (default
+//                   openai/gpt-4.1: gpt-4o-mini gave many wrong verdicts
+//                   when checking paper answers).
+//
+// questionPaper cases may carry "referenceFiles": [paper.pdf, key.pdf] and
+// "maxWrongAnswers". Then, besides the marks check and any factChecks, the
+// generated paper + answer key are (1) checked structurally (one answer per
+// question, no blank/placeholder answers, no duplicate questions, no mark
+// tags like [1] in question text) and (2) compared by the reference judge
+// with the official paper and key: a reused question's answer must agree
+// with the official key, a changed or new question's answer must be correct.
 //
 // Case modes (golden-cases.json "mode" field): "chat" (/chat, answerStyle=auto -
 // strictly grounded, no model override support issue here since /chat honors
@@ -225,8 +245,91 @@ async function runQuestionPaperCase(workerUrl, adminKey, modelOverride, testCase
   const paperText = JSON.stringify(genBody.paper);
   const answerKeyText = (akBody.answerKey?.entries || []).map((e) => e.answer).join("\n");
   return {
+    paperId: genBody.id,
+    paper: genBody.paper,
+    entries: akBody.answerKey?.entries || [],
     marksTotal: genBody.paper?.marksTotal ?? 0,
     combinedText: `${paperText}\n\n${answerKeyText}`,
+  };
+}
+
+const REFERENCE_JUDGE_MODEL_DEFAULT = "openai/gpt-4.1";
+const MARK_TAG = /\[(?:\d+\s*(?:½)?|½)(?:\s*[+×x]\s*[\d½]+)*\]/;
+
+function flattenQuestions(paper) {
+  const out = [];
+  for (const section of paper?.sections || []) {
+    (section.questions || []).forEach((q, i) => out.push({ section: section.section, questionIndex: i, ...q }));
+  }
+  return out;
+}
+
+function findEntry(entries, q) {
+  return entries.find((e) => e.section === q.section && e.questionIndex === q.questionIndex);
+}
+
+// Deterministic checks that need no model: every question has one usable
+// answer, no question appears twice, no marking-scheme tags leaked in.
+function structuralChecks(paper, entries) {
+  const questions = flattenQuestions(paper);
+  const problems = [];
+  if (entries.length !== questions.length) {
+    problems.push(`answer key has ${entries.length} entries for ${questions.length} questions`);
+  }
+  const seen = new Map();
+  for (const q of questions) {
+    const label = `${q.section} Q${q.questionIndex + 1}`;
+    const entry = findEntry(entries, q);
+    if (!entry || !String(entry.answer || "").replace(/[-–—\s.]/g, "")) problems.push(`${label}: missing or placeholder answer`);
+    if (MARK_TAG.test(q.text || "")) problems.push(`${label}: mark tag in question text`);
+    // Whole text: assertion-reason questions share a long "Directions: ..."
+    // opening, so comparing only a prefix flagged different questions.
+    const norm = String(q.text || "").toLowerCase().replace(/\s+/g, " ").trim();
+    if (seen.has(norm)) problems.push(`${label}: duplicate of ${seen.get(norm)}`);
+    else seen.set(norm, label);
+  }
+  return problems;
+}
+
+async function pdfText(filePath) {
+  const { extractText, getDocumentProxy } = await import("unpdf");
+  const doc = await getDocumentProxy(new Uint8Array(fs.readFileSync(filePath)));
+  const { text } = await extractText(doc, { mergePages: true });
+  return Array.isArray(text) ? text.join("\n") : text;
+}
+
+const REFERENCE_JUDGE_SYSTEM =
+  "You check a generated CBSE class 10 exam paper and its answer key against the OFFICIAL source paper and " +
+  "OFFICIAL answer key. The official text was extracted from PDFs, so maths symbols may be garbled; read it sensibly. " +
+  "For every generated question: (1) if it is the same as a source question (same wording, numbers, options), its " +
+  "answer must agree with the official key - compare the CONTENT of the chosen option, not just its letter, because " +
+  "options may have been reordered; (2) if it was changed or is new, its answer must be correct by standard CBSE " +
+  "class 10 knowledge; (3) if it reuses a question the official key marks as flawed (no correct option), report it " +
+  "under flawedReused. Report ONLY real errors: a wrong option, wrong final value or unit, or a statement that " +
+  "contradicts the official key or the science. Do NOT report wording, brevity, formatting, missing step marks, or " +
+  "an alternative correct method. Reply with ONLY a JSON object: " +
+  '{"checked": number, "reused": number, "wrong": [{"ref": "section and question number", "question": "short", ' +
+  '"given": "short", "expected": "short", "reason": "short"}], "flawedReused": [{"ref": "...", "note": "short"}]}';
+
+async function referenceJudge(openrouterKey, model, officialPaper, officialKey, paper, entries) {
+  const lines = flattenQuestions(paper).map((q) => {
+    const entry = findEntry(entries, q);
+    const table = q.table ? `\n   Table: ${JSON.stringify(q.table)}` : "";
+    return (
+      `[${q.section} Q${q.questionIndex + 1}] (${q.marks} marks, ${q.questionType})\n   ${q.text}${table}\n` +
+      `   ANSWER GIVEN: ${entry ? entry.answer : "(none)"}`
+    );
+  });
+  const user =
+    `OFFICIAL QUESTION PAPER:\n${officialPaper}\n\n=====\nOFFICIAL ANSWER KEY:\n${officialKey}\n\n=====\n` +
+    `GENERATED PAPER WITH ITS ANSWER KEY:\n${lines.join("\n\n")}`;
+  const raw = await callOpenRouter(openrouterKey, model, REFERENCE_JUDGE_SYSTEM, user, 4000);
+  const parsed = parseLlmJsonLoose(raw);
+  return {
+    checked: Number(parsed.checked) || 0,
+    reused: Number(parsed.reused) || 0,
+    wrong: Array.isArray(parsed.wrong) ? parsed.wrong : [],
+    flawedReused: Array.isArray(parsed.flawedReused) ? parsed.flawedReused : [],
   };
 }
 
@@ -245,9 +348,10 @@ async function main() {
   }
   const adminKey = args["admin-key"] || process.env.ADMIN_API_KEY || devVars.ADMIN_API_KEY || "";
   const openrouterKey = process.env.OPENROUTER_API_KEY || devVars.OPENROUTER_API_KEY || "";
-  const judgeModel = args["judge-model"] || JUDGE_MODEL_DEFAULT;
   const gradeMode = args["no-judge"] ? "cheap" : "judge";
   const featureChanged = args["feature-changed"] || null;
+
+  const judgeModel = args["judge-model"] || JUDGE_MODEL_DEFAULT;
 
   let modelOverride = typeof args.model === "string" ? args.model : null;
   if (!modelOverride && adminKey) {
@@ -270,7 +374,27 @@ async function main() {
     process.exit(1);
   }
 
-  const golden = JSON.parse(fs.readFileSync(path.join(__dirname, "golden-cases.json"), "utf8"));
+  const SUITES = { golden: "golden-cases.json", client: "client-papers-cases.json" };
+  const suite = typeof args.suite === "string" ? args.suite : "golden";
+  if (typeof args.cases !== "string" && !SUITES[suite]) {
+    console.error(`Unknown --suite=${suite}. Use one of: ${Object.keys(SUITES).join(", ")}.`);
+    process.exit(1);
+  }
+  const casesPath =
+    typeof args.cases === "string" ? path.resolve(args.cases) : path.join(__dirname, SUITES[suite]);
+  const golden = JSON.parse(fs.readFileSync(casesPath, "utf8"));
+  const referenceDir =
+    args["reference-dir"] || process.env.EVAL_REFERENCE_DIR || path.join(__dirname, "reference-papers");
+  const referenceJudgeModel = args["reference-judge-model"] || REFERENCE_JUDGE_MODEL_DEFAULT;
+  const referenceTextCache = new Map();
+  const readReference = async (name) => {
+    const file = path.join(referenceDir, name);
+    if (!fs.existsSync(file)) {
+      throw new Error(`official PDF not found: ${file} (put the four client PDFs in evals/reference-papers/, or pass --reference-dir)`);
+    }
+    if (!referenceTextCache.has(name)) referenceTextCache.set(name, await pdfText(file));
+    return referenceTextCache.get(name);
+  };
   // --case=id1,id2 runs only those cases (ids as in golden-cases.json).
   if (typeof args.case === "string") {
     const wanted = new Set(args.case.split(",").map((s) => s.trim()).filter(Boolean));
@@ -281,9 +405,23 @@ async function main() {
       process.exit(1);
     }
   }
+  // Fail fast, before any paid generation: every official PDF the selected
+  // cases need must exist (only needed when grading with the judge).
+  if (gradeMode === "judge") {
+    const needed = [...new Set(golden.cases.flatMap((c) => c.referenceFiles || []))];
+    const missing = needed.filter((name) => !fs.existsSync(path.join(referenceDir, name)));
+    if (missing.length) {
+      console.error(
+        `Missing official PDFs in ${referenceDir}: ${missing.join(", ")}. ` +
+          "Put them there (evals/reference-papers/ by default) or pass --reference-dir. " +
+          "Use --no-judge to run without them."
+      );
+      process.exit(1);
+    }
+  }
   const results = [];
 
-  console.log(`Running ${golden.cases.length} eval case(s) against ${workerUrl}`);
+  console.log(`Running ${golden.cases.length} eval case(s) from ${path.basename(casesPath)} against ${workerUrl}`);
   console.log(`  model under test: ${modelOverride}`);
   console.log(`  grading: ${gradeMode === "judge" ? `LLM judge (${judgeModel})` : "cheap keyword fallback"}`);
   if (featureChanged) console.log(`  feature changed: ${featureChanged}`);
@@ -315,7 +453,12 @@ async function main() {
         results.push({ id: testCase.id, mode: "explain", pass: verdict.pass, reason: verdict.reason, answerText });
         console.log(verdict.pass ? "PASS" : `FAIL - ${verdict.reason}`);
       } else if (testCase.mode === "questionPaper") {
-        const { marksTotal, combinedText } = await runQuestionPaperCase(workerUrl, adminKey, modelOverride, testCase);
+        const { paperId, paper, entries, marksTotal, combinedText } = await runQuestionPaperCase(
+          workerUrl,
+          adminKey,
+          modelOverride,
+          testCase
+        );
         const marksOk = marksTotal >= (testCase.minMarksTotal ?? testCase.marksTotal);
         if (!marksOk) {
           results.push({
@@ -329,7 +472,36 @@ async function main() {
         }
         let allSubPass = true;
         const subResults = [];
-        for (const fc of testCase.factChecks) {
+        let reference = null;
+        if (Array.isArray(testCase.referenceFiles) && testCase.referenceFiles.length === 2) {
+          const structural = structuralChecks(paper, entries);
+          // --no-judge: structural checks only; the full paper and key are
+          // saved in the report so they can be graded afterwards.
+          const ref =
+            gradeMode === "judge"
+              ? await referenceJudge(
+                  openrouterKey,
+                  referenceJudgeModel,
+                  ...(await Promise.all(testCase.referenceFiles.map(readReference))),
+                  paper,
+                  entries
+                )
+              : { checked: 0, reused: 0, wrong: [], flawedReused: [], notGraded: true, paper, entries };
+          const maxWrong = testCase.maxWrongAnswers ?? 0;
+          reference = { paperId, structural, ...ref, maxWrongAnswers: maxWrong };
+          const structuralPass = structural.length === 0;
+          const answersPass = ref.wrong.length <= maxWrong;
+          subResults.push({ id: "structure", pass: structuralPass, reason: structural.join("; ") || "ok" });
+          subResults.push({
+            id: "answers-vs-official-key",
+            pass: answersPass,
+            reason: ref.notGraded
+              ? "not graded (--no-judge); paper and key saved in the report"
+              : `${ref.wrong.length} wrong of ${ref.checked} checked (${ref.reused} reused from the source)`,
+          });
+          if (!structuralPass || !answersPass) allSubPass = false;
+        }
+        for (const fc of testCase.factChecks || []) {
           const verdict = await grade(gradeMode, {
             keyFacts: fc.keyFacts,
             cheapKeywords: fc.cheapKeywords,
@@ -340,12 +512,21 @@ async function main() {
           subResults.push({ id: fc.id, pass: verdict.pass, reason: verdict.reason });
           if (!verdict.pass) allSubPass = false;
         }
-        results.push({ id: testCase.id, mode: "questionPaper", pass: allSubPass, marksTotal, factChecks: subResults });
+        results.push({ id: testCase.id, mode: "questionPaper", pass: allSubPass, marksTotal, factChecks: subResults, reference });
         console.log(
           allSubPass
-            ? `PASS (${marksTotal} marks, ${subResults.length} fact checks)`
-            : `FAIL - ${subResults.filter((r) => !r.pass).map((r) => r.id).join(", ")}`
+            ? `PASS (${marksTotal} marks, ${subResults.length} checks)`
+            : `FAIL - ${subResults
+                .filter((r) => !r.pass)
+                .map((r) => `${r.id}: ${r.reason}`)
+                .join(" | ")}`
         );
+        for (const w of reference?.wrong || []) {
+          console.log(`      wrong ${w.ref}: gave "${w.given}", expected "${w.expected}" (${w.reason})`);
+        }
+        for (const f of reference?.flawedReused || []) {
+          console.log(`      note: flawed source question reused - ${f.ref}: ${f.note}`);
+        }
       }
     } catch (err) {
       results.push({ id: testCase.id, mode: testCase.mode, pass: false, reason: `error: ${err.message}` });
@@ -366,6 +547,7 @@ async function main() {
       {
         timestamp: new Date().toISOString(),
         workerUrl,
+        casesFile: path.basename(casesPath),
         modelUnderTest: modelOverride,
         gradeMode,
         judgeModel: gradeMode === "judge" ? judgeModel : null,

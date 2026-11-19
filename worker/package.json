@@ -9,14 +9,16 @@
   "scripts": {
     "test": "vitest run",
     "dev": "wrangler dev",
-    "deploy:staging": "wrangler deploy --env staging",
-    "deploy:prod": "wrangler deploy --env production",
+    "deploy:staging": "node scripts/deploy.js staging",
+    "deploy:prod": "node scripts/deploy.js production",
     "db:migrate:dev": "wrangler d1 migrations apply edu-live-db-dev --local",
     "db:migrate:staging": "wrangler d1 migrations apply edu-live-db-staging --remote --env staging",
     "db:migrate:prod": "wrangler d1 migrations apply edu-live-db --remote --env production",
     "db:check": "node scripts/check-migrations.js",
     "db:backup:prod": "node scripts/backup-prod.js",
-    "eval": "node evals/run-evals.js"
+    "eval": "node evals/run-evals.js",
+    "eval:golden": "node evals/run-evals.js --suite=golden",
+    "eval:client": "node evals/run-evals.js --suite=client"
   },
   "keywords": [],
   "author": "",
