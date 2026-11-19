@@ -8,7 +8,8 @@
 # below repeats its own bindings. No account_id at the top level on purpose: a
 # bare `wrangler deploy` can never reach the buildminds account.
 #
-# REPLACE_WITH_* placeholders must be filled in before the staging deploy works.
+# Deploy with `npm run deploy:staging` / `npm run deploy:prod` (deploys this Worker
+# and the frontend together, version-tagged; see docs/ENVIRONMENTS.md).
 
 name = "edu-live-worker-dev"
 main = "src/index.ts"

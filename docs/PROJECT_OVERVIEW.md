@@ -1,6 +1,6 @@
 # Edukripa — Project Overview
 
-A RAG (retrieval-augmented generation) chatbot for 16-17 year old students, restricted to science/maths, running entirely on Cloudflare's free-tier stack (Workers, Vectorize, Workers AI, R2, D1, Pages). Students upload their own PDF notes; the bot answers questions grounded in that content, falling back to web search when nothing relevant is indexed. A separate admin dashboard gives visibility into what's indexed, what happened on each query, token/cost usage, and lets an operator change pipeline behavior (top-K, confidence threshold, RAG-only vs. web fallback, etc.) without redeploying.
+A RAG (retrieval-augmented generation) study assistant for class 10 (CBSE) students aged 16-17, restricted to science/maths, running on Cloudflare (Workers on the paid plan, Vectorize, Workers AI, R2, D1, Browser Rendering) with OpenRouter models. An admin uploads the notes and question papers through the dashboard (students don't upload). Students use three features: **chat** (answers grounded in the documents, falling back to web search when nothing relevant is indexed), the **Concept Explainer**, and **question-paper generation** with answer keys and PDF downloads. They reach it through the widget embedded on edukripa.com, or the frontend site directly. Environments, release flow and deploys: `docs/ENVIRONMENTS.md`; how the code works in detail: `CLAUDE.md`. A separate admin dashboard gives visibility into what's indexed, what happened on each query, token/cost usage, and lets an operator change pipeline behavior (top-K, confidence threshold, RAG-only vs. web fallback, etc.) without redeploying.
 
 ---
 
@@ -27,10 +27,12 @@ A RAG (retrieval-augmented generation) chatbot for 16-17 year old students, rest
 | **`cors.ts`** | Adds the CORS headers every response needs (the dashboard/chat frontend and the Worker are different origins) and answers `OPTIONS` preflight requests. |
 | **`types.ts`** | Shared plain data types (`PageText`, `Chunk`) used across the PDF/chunking pipeline. |
 
-### `frontend/` — two independent static pages (Cloudflare Worker with static assets, `frontend`)
+### `frontend/` — static pages and the widget (Cloudflare Worker with static assets, `edu-live-frontend`)
 
 | File | Business functionality |
 |---|---|
+| **`widget.js`** | The **embeddable side panel** used on edukripa.com: a round button that opens the student app in a right-hand panel. Students can drag its edge up to the full page width or press the expand button (⤢) to fill the page; the panel remembers the size. Full screen on phones. edukripa.com loads the prod copy, so a prod frontend deploy reaches students immediately. |
+| **`env.js`** | Points each page at the right backend (local, staging or prod) from the page's own address, and shows an orange "not production" banner outside prod. |
 | **`index.html` / `app.js` / `style.css`** | The **student-facing chat app**: an Auto/1-2 Marks/5 Marks answer-style selector and a chat box (calls `/chat`). No upload UI — PDF upload is admin-only, now in the dashboard. Shows an animated "Thinking..." indicator with cycling status text while waiting for an answer (not real backend telemetry — there's no streaming — just a UX cue). |
 | **`dashboard.html` / `dashboard.js` / `dashboard.css`** | The **operator/admin dashboard**, no chat UI. Four tabs: **PDFs & Chunks** (indexed documents, chunk-text browser for the 3 newest), **TransactionTracker** (last 3 queries as a collapsible tree — retrieval table, JEV/LLM input-output, model names), **Costing** (token/cost usage by range), **Settings** (edit runtime config; changes apply on the next question, no restart needed). Admin key is entered once and cached in the browser's `localStorage`. |
 
@@ -161,9 +163,9 @@ Operator opens dashboard.html, enters admin key (cached in localStorage)
 
 | Store | What lives there |
 |---|---|
-| **R2** (`edu-live-pdfs`) | The raw PDF bytes, plus `chunkCount`/`pageCount`/`indexedAt` as custom metadata. |
+| **R2** (`edu-live-pdfs`) | The raw PDF bytes, plus `chunkCount`/`pageCount`/`indexedAt`/`enriched` as custom metadata; also page screenshots (`page-images/`), the enriched text (`cleaned/`) and rendered question-paper PDFs (`question-papers/`). |
 | **Vectorize** (`edu-live-chunks`) | One vector per chunk, with the chunk's text/page/source as metadata. IDs are deterministic (`vectorId.ts`), which is what lets the dashboard fetch chunk text back out without a separate index. |
-| **D1** (`edu-live-db`) | Two tables: `transactions` (one row per `/chat` call — the full trace) and `config` (key/value runtime settings). |
+| **D1** (`edu-live-db`) | Three tables: `transactions` (audit and cost record: one row per chat answer, explanation, question paper, answer key and PDF enrichment attempt), `config` (key/value runtime settings) and `question_papers` (cache of generated papers and answer keys). |
 
 ## 6. Auth model
 
