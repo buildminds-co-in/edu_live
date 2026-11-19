@@ -13,7 +13,8 @@ Three environments. Prod holds real student data and is treated as production.
 | Vectorize index | `edu-live-chunks-dev` in your own account (cannot run locally) | `edu-live-chunks-staging` | `edu-live-chunks` |
 | OpenRouter key | Your own key, in `worker/.dev.vars` | Staging key, low spending limit | Prod key, its own spending limit |
 | Admin and ingest keys | `<ADMIN_KEY>` for now | `<ADMIN_KEY>` for now | `<ADMIN_KEY>` for now (rotate before real use) |
-| URL | `localhost` | `https://edu-live-frontend-staging.buildminds-co-in.workers.dev` (Worker: `https://edu-live-worker-staging.buildminds-co-in.workers.dev`) | `https://edu-live-frontend.buildminds-co-in.workers.dev` |
+| URL | `localhost` | `https://edu-live-frontend-staging.buildminds-co-in.workers.dev` (Worker: `https://edu-live-worker-staging.buildminds-co-in.workers.dev`) | `https://edu-live-frontend.buildminds-co-in.workers.dev` (Worker: `https://edu-live-worker.buildminds-co-in.workers.dev`) |
+| Embedded on | none | none (test the widget on the staging dashboard) | **edukripa.com** loads the prod `widget.js`, so a prod frontend deploy reaches students immediately (`widget.js` is served with `max-age=0`) |
 | Domain (later) | none | `staging.<domain>` behind Cloudflare Access (free) | `<domain>` and `api.<domain>` |
 
 Every Vectorize index is 768 dimensions with cosine metric, matching
@@ -31,8 +32,12 @@ and re-ingesting every PDF.
   a laptop. It holds real questions from 16-17 year old students.
 - **One master copy of the PDFs**, in the shared buildminds-owned Drive folder.
 - **Staging holds the eval PDFs**: `carbon compound notes.pdf`,
-  `light notes.pdf`, `life Processes notes.pdf`, `control coordination test.pdf`.
+  `light notes.pdf`, `life Processes notes.pdf`, `control coordination test.pdf`
+  (golden suite), and the four Edukripa sample papers and keys (client suite).
   Names must match exactly.
+- **The client eval suite also reads the official papers locally**: put the
+  four `Edukripa_*.pdf` files in `worker/evals/reference-papers/` (gitignored,
+  never committed).
 - **R2 holds three kinds of file**: source PDFs, `page-images/`, and
   `cleaned/`. The last two are rebuilt by ingestion, so they are never copied.
 
@@ -43,8 +48,12 @@ and re-ingesting every PDF.
 - Frontend pages pick their Worker from their own hostname
   (`frontend/env.js`). Staging pages can't reach prod, and unknown hosts get no
   backend. Non-prod pages show an orange banner.
-- The eval harness (`worker/evals/run-evals.js`) requires a worker URL and
-  refuses production unless `--allow-prod` is passed.
+- The eval harness (`worker/evals/run-evals.js`, `npm run eval:golden` /
+  `npm run eval:client`) requires a worker URL and refuses production unless
+  `--allow-prod` is passed. The client suite stops before any paid call if an
+  official PDF is missing.
+- `npm run deploy:prod` refuses unless the checkout is exactly on a release tag
+  with no uncommitted changes (see "Deploys and version labels").
 - `npm run db:check` fails if a new migration drops or renames anything.
 - `npm run db:backup:prod` records a D1 Time Travel restore point for prod.
   It writes no data to disk.
@@ -70,16 +79,43 @@ Restore a prod point if needed:
 `npx wrangler d1 time-travel restore edu-live-db --env production --bookmark=<bookmark>`.
 Time Travel covers about 7 days on the free plan.
 
-## Release flow (summary)
+## Release flow
 
 - `feature/<name>` and `fix/<name>` branch from `staging`, merge back into
-  `staging` through a PR with one approval.
-- `staging` merges into `main` through a release PR, by buildminds only.
+  `staging` through a PR with one approval. Then `npm run deploy:staging` and
+  test on staging.
 - `hotfix/<name>` branches from `main`, merges into `main`, and then `main` is
   merged back into `staging`.
-- Merge-back PRs (`main` into `staging`) use **"Create a merge commit"**, never
-  squash. Squashing leaves the release tags out of `staging`'s history, so the
-  next release PR shows already-shipped commits as new.
+- **Every PR is merged with "Create a merge commit"**, never squash. Squashing
+  leaves commits and release tags out of the other branch's history, so the
+  next release PR shows already-shipped work as new and conflicts (this
+  happened with PRs #10 and #18; v1.1.7 repaired it).
+- A PR author can't approve their own PR: approval comes from buildminds or
+  Jameel.
+
+Releasing `staging` to prod (as done for v1.1.7):
+
+1. Branch `release/vX.Y.Z` from `staging`. Add `docs/releases/vX.Y.Z.md`
+   from `TEMPLATE.md` (changes, migrations, staging verification, rollback
+   IDs = the current prod versions).
+2. Check it merges cleanly into `main`:
+   `git merge-tree --write-tree origin/main HEAD`. If it conflicts, merge
+   `origin/main` into the release branch first and resolve there.
+3. PR `release/vX.Y.Z` into `main`; buildminds approves and merges (merge
+   commit).
+4. Tag the merge commit: `git tag -a vX.Y.Z origin/main -m "Release vX.Y.Z"`,
+   `git push origin vX.Y.Z`.
+5. If there is a migration: `npm run db:backup:prod`, then
+   `npm run db:migrate:prod`.
+6. `git switch --detach vX.Y.Z`, `npm ci`, `npx vitest run`, then
+   `npm run deploy:prod` (from `worker/`). Run by a person: Claude Code's auto
+   mode blocks prod deploys.
+7. Smoke test prod: app, dashboard, `/question-paper/catalog`, `/chat`
+   answers with a source, `/admin/config` returns 401 without the key, and
+   the change itself.
+8. Branch `merge/main-into-staging-vX.Y.Z` from `main`, fill in the prod
+   section of the release note, PR into `staging` (merge commit). Then
+   `npm run deploy:staging` so staging shows `vX.Y.Z+<commit>`.
 
 ## Deploys and version labels
 
@@ -102,43 +138,35 @@ same version, so you can always tell what is running:
 - Don't run `npx wrangler deploy --env ...` by hand for staging or prod; it
   skips the tag and deploys only one of the two.
 
-## One-time setup (not yet done)
+## One-time setup
 
-These steps need someone signed in to the right Cloudflare account. The
-Cloudflare resources do not exist yet, so the staging deploy fails until they do.
+**Staging and prod are set up** (in the buildminds account, signed in as
+buildminds.co.in@gmail.com; members of this account can reach prod resources,
+so access is the buildminds team's call). The `staging` git branch exists.
 
-1. **Sign in to the buildminds account** (`npx wrangler login` as
-   buildminds.co.in@gmail.com). Staging resources go in this account, not a
-   separate one. Note: members of this account can reach prod resources, so
-   access is the buildminds team's call.
-2. **In the buildminds account, create:**
-   - `npx wrangler d1 create edu-live-db-staging`
-   - `npx wrangler r2 bucket create edu-live-pdfs-staging`
-   - `npx wrangler vectorize create edu-live-chunks-staging --dimensions=768 --metric=cosine`
-3. **Fill in the placeholder:** `worker/wrangler.toml`,
-   `[env.staging]` `database_id` = `REPLACE_WITH_STAGING_D1_ID`. The account ID
-   is already set to the buildminds account.
-4. **Migrate and set secrets in staging:**
-   - `npm run db:migrate:staging`
-   - `npx wrangler secret put OPENROUTER_API_KEY --env staging` (staging key, low limit)
-   - `npx wrangler secret put ADMIN_API_KEY --env staging`
-   - `npx wrangler secret put INGEST_API_KEY --env staging`
-5. **Deploy staging:** `npm run deploy:staging`, then from `frontend/`:
-   `npx wrangler deploy --env staging`
-6. **Upload the four eval PDFs** from the master folder through the staging
-   dashboard. Then set the staging worker URL for evals:
-   `node evals/run-evals.js --worker-url=https://edu-live-worker-staging.buildminds-co-in.workers.dev`
-7. **Local dev:** each developer runs `wrangler d1 create edu-live-db-dev`,
-   `wrangler r2 bucket create edu-live-pdfs-dev`, and
-   `wrangler vectorize create edu-live-chunks-dev --dimensions=768 --metric=cosine`
-   in their own account, then pastes the D1 ID into `worker/wrangler.toml` (top
-   level). Copy `worker/.dev.vars.example` to `worker/.dev.vars`.
+**Local dev, per developer**, in your own Cloudflare account:
+
+1. `npx wrangler d1 create edu-live-db-dev`,
+   `npx wrangler r2 bucket create edu-live-pdfs-dev`,
+   `npx wrangler vectorize create edu-live-chunks-dev --dimensions=768 --metric=cosine`.
+2. Paste the D1 ID into `worker/wrangler.toml` (top level).
+3. Copy `worker/.dev.vars.example` to `worker/.dev.vars` and add your own
+   OpenRouter key.
+4. `npm ci` in `worker/`, then `npm run db:migrate:dev`.
+
+If staging ever has to be rebuilt: create `edu-live-db-staging`,
+`edu-live-pdfs-staging` and `edu-live-chunks-staging` (768, cosine) in the
+buildminds account, put the D1 ID in `[env.staging]`, run
+`npm run db:migrate:staging`, set the three secrets with `--env staging`,
+`npm run deploy:staging`, and upload the eval PDFs through the staging
+dashboard.
 
 ## Open items
 
 - `worker/test-fixtures/` contains committed PDFs. The rule is "one master copy",
-  so these should move out of the repo once the master folder is set up.
-- The git `staging` branch does not exist yet. It should be created from `main`
-  once, by buildminds.
-- The admin and ingest keys are still `<ADMIN_KEY>` in every environment. Rotate
-  them before real use and move them out of the example file.
+  so these should move out of the repo (keep `test-fixtures/enrichment/` and
+  `test-fixtures/question-paper/`, which are regression fixtures).
+- `content/manifest.md` still needs the link to the master Drive folder.
+- The admin and ingest keys are still a shared placeholder in every
+  environment. Rotate them before real use and move them out of the example
+  file.

@@ -1,97 +1,86 @@
-# Edukripa RAG (Cloudflare)
+# Edukripa (Cloudflare)
 
-Cloudflare-native RAG chatbot for science/maths Q&A, aimed at 16-17 year old
-students. Free-tier stack: Workers, Vectorize, Workers AI, R2, Pages.
+A study assistant for class 10 (CBSE) science and maths students, built
+entirely on Cloudflare (Workers, Vectorize, Workers AI, R2, D1, Browser
+Rendering) with OpenRouter models. It has three student features, all
+grounded in documents an admin uploads:
 
-- `worker/` — the API: `POST /ingest` (upload + index a PDF), `POST /chat`
-  (ask a question). Pipeline: guardrail → retrieve → rerank → JEV filter →
-  web fallback → generate. See
-  `docs/superpowers/specs/2026-09-28-cloudflare-rag-migration-design.md`
-  for the full design and
-  `docs/superpowers/plans/2026-09-28-cloudflare-rag-migration.md` for how
-  it was built.
-- `frontend/` — a static Pages site: a PDF upload form and a chat box.
+- **Chat**: answers questions from the uploaded notes and papers, with the
+  source page shown under the answer.
+- **Concept Explainer**: a structured explanation of one concept.
+- **Question papers**: generates a paper and its answer key from chosen
+  chapters, with PDF downloads.
 
-## Prerequisites
+Students use it on edukripa.com through an embedded widget, or on the
+frontend site directly. An admin dashboard handles uploads, transactions,
+costs and runtime settings.
 
-- A Cloudflare account.
-- `wrangler login` (run inside `worker/` or `frontend/` — both use the same
-  account).
-- An OpenRouter API key (used to call the JEV relevance-filtering model)
-  if you want JEV actually filtering chunks rather than passing everything
-  through. Without one, the pipeline still works — JEV calls fail auth and
-  fall back to "pass chunks through unfiltered," logged as
-  `JEV call failed, passing chunks through unfiltered`.
+## What's where
 
-## First-time setup
+| Path | What it is |
+|---|---|
+| `worker/` | The API: one Cloudflare Worker (`edu-live-worker`). Ingestion, chat, explainer, question papers, admin routes. |
+| `frontend/` | Static files served by a second Worker (`edu-live-frontend`): the student app (`index.html`), the admin dashboard (`dashboard.html`), the embeddable widget (`widget.js`) and `env.js`, which picks the right API for the environment. |
+| `worker/evals/` | Manual eval suites run against a deployed Worker (`npm run eval:golden`, `npm run eval:client`). |
+| `docs/` | `ENVIRONMENTS.md` (environments, data rules, release flow, deploys), `PROJECT_OVERVIEW.md` (business-level walkthrough), `releases/` (one note per release), `superpowers/` (design specs and plans). |
+| `CLAUDE.md` | Architecture reference, kept current. Start here for how the code works. |
+| `content/manifest.md` | Which PDFs exist and which environment needs them. The PDFs themselves are not in the repo. |
+
+## Environments
+
+| | Student app and dashboard | API |
+|---|---|---|
+| Prod | https://edu-live-frontend.buildminds-co-in.workers.dev (`/dashboard`) | https://edu-live-worker.buildminds-co-in.workers.dev |
+| Staging | https://edu-live-frontend-staging.buildminds-co-in.workers.dev (`/dashboard`) | https://edu-live-worker-staging.buildminds-co-in.workers.dev |
+| Local | `npx serve .` in `frontend/` | `wrangler dev` on localhost:8787 |
+
+edukripa.com embeds the **prod** widget
+(`https://edu-live-frontend.buildminds-co-in.workers.dev/widget.js`), so a
+prod frontend deploy reaches students straight away.
+
+Rules for data, accounts and migrations: `docs/ENVIRONMENTS.md`.
+
+## Getting started (local dev)
 
 ```bash
 cd worker
-npm install
-npx wrangler vectorize create edu-live-chunks --dimensions=768 --metric=cosine
-npx wrangler r2 bucket create edu-live-pdfs
-npx wrangler secret put OPENROUTER_API_KEY   # paste your OpenRouter key when prompted
-```
-
-## Local development
-
-```bash
-cd worker
+npm ci                                   # install exact dependencies (re-run after any dependency change)
+cp .dev.vars.example .dev.vars           # then put your own OpenRouter key in it
+npx wrangler login                       # your own Cloudflare account for local dev
 npx wrangler dev --persist-to=.wrangler/state
 ```
 
-Note: `wrangler dev --local` cannot emulate Vectorize or Workers AI — both
-always hit the real (free-tier) Cloudflare services, so `wrangler.toml`
-sets `remote = true` on the Vectorize binding and Workers AI is remote by
-default. Expect real (if small) usage against your account even in dev.
+Local dev needs its own D1, R2 and Vectorize resources in your account; the
+one-time steps are in `docs/ENVIRONMENTS.md`. `wrangler dev` cannot emulate
+Vectorize, Workers AI or Browser Rendering, so those always hit the real
+(paid per use) services.
 
-In a separate terminal, serve the frontend:
+In a second terminal: `cd frontend && npx serve .`. On `localhost`,
+`frontend/env.js` points the pages at `http://localhost:8787` and shows a
+"LOCAL ENVIRONMENT" banner.
 
-```bash
-cd frontend
-npx serve .
-```
-
-`frontend/app.js`'s `WORKER_URL` constant points at whatever URL the
-Worker is reachable at — update it to your local `wrangler dev` URL (or
-the deployed Worker URL) as needed.
-
-## Tests
+## Tests and evals
 
 ```bash
 cd worker
-npx vitest run     # pure-logic unit tests (chunker, guardrail, rerank, JEV filter, web search formatting)
-npx tsc --noEmit   # type-check
+npx vitest run       # unit tests (all bindings mocked)
+npx tsc --noEmit     # type check (test/chat.test.ts has known mock-type errors)
+npm run eval:golden -- --worker-url=<staging worker URL>
+npm run eval:client -- --worker-url=<staging worker URL>   # needs the official PDFs in evals/reference-papers/
 ```
 
-Binding-dependent behavior (ingestion, chat pipeline) is verified manually
-via `wrangler dev` + curl, not automated — see the plan doc for the exact
-commands used.
+Evals make real model calls and cost OpenRouter credit. They refuse prod
+unless `--allow-prod` is passed.
 
-## Deploy
+## Branches, releases and deploys
 
-```bash
-cd worker
-npx wrangler deploy
-```
-
-Update `WORKER_URL` in `frontend/app.js` to the deployed Worker's URL,
-then:
-
-```bash
-cd ../frontend
-npx wrangler deploy
-```
-
-## Known follow-ups
-
-- No multi-turn agentic tool-calling loop yet — the chat pipeline is a
-  fixed sequence (retrieve → rerank → JEV → web fallback → generate), not
-  the model deciding when to re-search.
-- Observability is `wrangler tail`/`console.log` only for now; no
-  persistent dashboard.
-- The generation model (`@cf/meta/llama-3.1-8b-instruct-fp8`) and reranker
-  model (`@cf/baai/bge-reranker-base`) were confirmed against Workers AI's
-  live catalog as of 2026-09-28 — re-check `npx wrangler ai models` if
-  either starts erroring, since Cloudflare deprecates models over time
-  (this already happened once during development).
+- `feature/<name>` or `fix/<name>` from `staging`, PR into `staging` (one
+  approval), deploy staging, test.
+- Release: `release/vX.Y.Z` PR into `main` (buildminds approves), tag
+  `vX.Y.Z`, deploy prod from the tag, then merge `main` back into `staging`.
+- Always merge PRs with **"Create a merge commit"**, never squash.
+- Deploy with `npm run deploy:staging` or `npm run deploy:prod` from
+  `worker/`. Each deploys the Worker **and** the frontend, both labelled with
+  the same version. Prod deploys only from a clean release tag. Details and
+  checks: `docs/ENVIRONMENTS.md`, "Deploys and version labels".
+- Each release has a note in `docs/releases/` (copy `TEMPLATE.md`).

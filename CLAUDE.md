@@ -4,19 +4,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A Cloudflare-native RAG chatbot for science/maths Q&A, aimed at 16-17 year old students. Free-tier stack: Workers, Vectorize, Workers AI, R2, D1, Pages. Two independently deployed pieces:
+A Cloudflare-native RAG chatbot, concept explainer and question-paper generator for class 10 (CBSE) science/maths students, aged 16-17. Stack: Workers (paid plan since 2026-11-14; the free plan hit CPU limits on PDF parsing), Vectorize, Workers AI, R2, D1, Browser Rendering, with OpenRouter models (default `google/gemini-2.5-flash`). Students reach it through the widget on edukripa.com. Two deployed pieces:
 
 - `worker/` — the API (one Cloudflare Worker, `edu-live-worker`): `POST /ingest` (upload + index a PDF), `POST /chat` (ask a question), `POST /explain` (Concept Explainer), `/question-paper/*` (generate a question paper + answer key from indexed chapters), `GET /images/:key` (serve a captured page screenshot), and `/admin/*` (dashboard data + config).
-- `frontend/` — two independent static Cloudflare Pages sites, deployed separately:
-  - `index.html`/`app.js`/`style.css` — the student-facing chat app. No upload UI.
-  - `dashboard.html`/`dashboard.js`/`dashboard.css` — the admin-only operator dashboard (Data Ingestion Dashboard / TransactionTracker / Costing / Settings tabs). PDF uploads happen here, not on the chat page.
+- `frontend/` — static files served by a second Worker with static assets (`edu-live-frontend`, `frontend/wrangler.jsonc`):
+  - `index.html`/`app.js`/`style.css` — the student-facing app (Chat / Explainer / Q. Paper tabs). No upload UI. `?embed=true` is the layout used inside the widget.
+  - `dashboard.html`/`dashboard.js`/`dashboard.css` — the admin-only operator dashboard (Data Ingestion Dashboard / TransactionTracker / Costing / Settings tabs). PDF uploads happen here, not on the chat page. It also loads the widget, which is the easiest place to test it on staging.
+  - `widget.js` — the embeddable side panel. A host page adds `<script src=".../widget.js">`; it shows a round button that opens a fixed right-hand panel with the app in an iframe (`./?embed=true`, resolved from the script's own URL, so the widget always talks to its own environment). The panel can be dragged from its left edge up to the full page width (minimum 300 px), and the header's expand button (⤢/⤡) fills the page and restores the previous width. Width and expanded state are kept in `localStorage` (`edukripa-widget`). On phones (< 768 px) it is always full screen. **edukripa.com loads the prod `widget.js`**, so a prod frontend deploy reaches students immediately.
+  - `env.js` — picks the Worker URL from the page's own hostname (localhost → `localhost:8787`, `edu-live-frontend-staging.*` → the staging Worker, the prod host → the prod Worker, anything else → none) and shows an orange banner outside prod. `app.js` reads it as `WORKER_URL`.
 
 ## Commands
 
 All commands run from `worker/` unless noted.
 
 ```bash
-npm install                 # installs @cloudflare/puppeteer, unpdf, etc.
+npm ci                      # exact dependencies (@cloudflare/puppeteer, unpdf, katex, ...);
+                             # re-run after any dependency change or the deploy build fails
 npx wrangler login           # once per machine; same account for worker/ and frontend/
 
 npx vitest run                              # full test suite
@@ -50,14 +53,18 @@ npx wrangler secret put INGEST_API_KEY       # protects /ingest (optional)
 From `frontend/`:
 
 ```bash
-npx serve .          # local static serving; app.js's WORKER_URL const must point at
-                      # a reachable worker (local wrangler dev or deployed)
+npx serve .          # local static serving; on localhost env.js points the pages
+                      # at the local `wrangler dev` (localhost:8787)
 # Staging/prod frontend deploys go through `npm run deploy:*` in worker/ (tags both)
 # (it deploys BOTH index.html and dashboard.html with the Worker)
 # Environments, data rules, and the migration order: docs/ENVIRONMENTS.md
 ```
 
 **There are two deploy targets** (`worker/` and `frontend/`) and no CI/CD. Staging and prod always deploy **both together**, tagged with the same version, via `npm run deploy:staging` / `deploy:prod` (see docs/ENVIRONMENTS.md, "Deploys and version labels"), even if only one changed. Nothing auto-deploys on merge to `main`.
+
+**Branches and releases** (full steps: docs/ENVIRONMENTS.md, "Release flow"): `feature/*` from `staging` → PR into `staging` → release branch PR into `main` → tag `vX.Y.Z` → `npm run deploy:prod` from the tag → merge `main` back into `staging`. **Always merge with "Create a merge commit", never squash.** Each release gets `docs/releases/vX.Y.Z.md` from `TEMPLATE.md`. `gh` is not installed: PRs are opened from GitHub compare links.
+
+**Writing files from the shell:** text passed through Bash heredocs here can lose backslashes (`\n` becomes a newline, `\f` a form feed); that is how this file got corrupted in v1.1.4. Edit files with an editor or the Edit tool, and check for control characters after scripted edits (`grep -cP '[\x00-\x08\x0b\x0c\x0e-\x1f]' <file>` should print 0).
 
 Binding-dependent behavior (ingestion, chat pipeline, screenshot capture) is covered by unit tests with mocked bindings; there is no integration test suite against real Vectorize/Workers AI/Browser Rendering — verify those manually via `wrangler tail` + the deployed app after a deploy.
 

@@ -1,7 +1,7 @@
 {
-  // Environments: see docs/ENVIRONMENTS.md. Always pass --env explicitly.
-  //   npx wrangler deploy --env staging
-  //   npx wrangler deploy --env production
+  // Environments: see docs/ENVIRONMENTS.md. Don't deploy this by hand:
+  // `npm run deploy:staging` / `npm run deploy:prod` in worker/ deploy the
+  // Worker and this frontend together, both tagged with the release version.
   // The top level is a personal dev name with no account_id, so a bare deploy
   // cannot reach the buildminds account.
   "$schema": "node_modules/wrangler/config-schema.json",
