@@ -26,7 +26,14 @@
   var state = loadState();
   var isOpen = false;
   var panelWidth = state.width || cfg.width;
+  var isExpanded = state.expanded === true;
   var isMobile = window.innerWidth < 768;
+
+  // The panel can be dragged as wide as the page; "expanded" fills it.
+  // Visible width (excludes the host page's scrollbar).
+  function maxWidth() { return document.documentElement.clientWidth || window.innerWidth; }
+  function clampWidth(w) { return Math.max(MIN_WIDTH, Math.min(maxWidth(), w)); }
+  panelWidth = clampWidth(panelWidth);
 
   // --- Styles ---
   var style = document.createElement("style");
@@ -59,15 +66,23 @@
     "  border-radius:6px;transition:background .1s;",
     "}",
     ".ek-widget-close:hover{background:#e4e1d8;}",
+    ".ek-widget-expand{font-size:16px;}",
     ".ek-widget-iframe{border:none;flex:1;width:100%;}",
+    // Pinned to both edges (not 100vw) so a host-page scrollbar never hides
+    // the panel's left edge.
+    ".ek-widget-panel.ek-expanded{left:0;width:auto!important;}",
+    ".ek-widget-panel.ek-expanded .ek-widget-resize{display:none;}",
+    ".ek-widget-panel.ek-dragging{transition:none;user-select:none;}",
+    ".ek-widget-panel.ek-dragging .ek-widget-iframe{pointer-events:none;}",
     ".ek-widget-resize{",
     "  position:absolute;top:0;left:0;width:5px;height:100%;cursor:col-resize;",
     "  background:transparent;z-index:1;",
     "}",
     ".ek-widget-resize:hover{background:rgba(238,124,92,0.25);}",
     "@media(max-width:767px){",
-    "  .ek-widget-panel{width:100vw!important;}",
+    "  .ek-widget-panel{left:0;width:auto!important;}",
     "  .ek-widget-resize{display:none;}",
+    "  .ek-widget-expand{display:none!important;}",
     "  .ek-widget-btn{bottom:16px;right:16px;width:50px;height:50px;}",
     "  .ek-widget-btn svg{width:22px;height:22px;}",
     "}"
@@ -84,16 +99,38 @@
   // --- Panel ---
   var panel = document.createElement("div");
   panel.className = "ek-widget-panel";
-  panel.style.width = (isMobile ? window.innerWidth : panelWidth) + "px";
 
   var header = document.createElement("div");
   header.className = "ek-widget-header";
   header.innerHTML = '<span>Edukripa</span>';
+  var expandBtn = document.createElement("button");
+  expandBtn.className = "ek-widget-close ek-widget-expand";
   var closeBtn = document.createElement("button");
   closeBtn.className = "ek-widget-close";
   closeBtn.setAttribute("aria-label", "Close chat");
+  closeBtn.title = "Close";
   closeBtn.textContent = "×";
+  header.appendChild(expandBtn);
   header.appendChild(closeBtn);
+
+  // Width: full screen on phones, the whole page when expanded, otherwise
+  // the dragged width (up to the full page).
+  function applyWidth() {
+    // Phones and "expanded" are pinned to both edges by CSS (left:0;right:0),
+    // which, unlike 100vw, never slides under a host-page scrollbar.
+    panel.style.width = isMobile || isExpanded ? "" : panelWidth + "px";
+    panel.classList.toggle("ek-expanded", isExpanded);
+    expandBtn.textContent = isExpanded ? "⤡" : "⤢";
+    expandBtn.title = isExpanded ? "Restore size" : "Expand to full page";
+    expandBtn.setAttribute("aria-label", expandBtn.title);
+    expandBtn.setAttribute("aria-pressed", isExpanded ? "true" : "false");
+  }
+  function toggleExpanded() {
+    isExpanded = !isExpanded;
+    applyWidth();
+    saveState({ width: panelWidth, expanded: isExpanded });
+  }
+  applyWidth();
 
   var resizeHandle = document.createElement("div");
   resizeHandle.className = "ek-widget-resize";
@@ -122,22 +159,26 @@
   }
   btn.addEventListener("click", open);
   closeBtn.addEventListener("click", close);
+  expandBtn.addEventListener("click", toggleExpanded);
 
-  // --- Drag Resize ---
+  // --- Drag Resize (up to the full page width) ---
   resizeHandle.addEventListener("mousedown", function (e) {
     e.preventDefault();
     var startX = e.clientX;
     var startW = panel.offsetWidth;
+    // While dragging, the chat iframe must not swallow mouse events, or the
+    // drag stops as soon as the pointer crosses into the panel.
+    panel.classList.add("ek-dragging");
     function onMove(ev) {
       var delta = startX - ev.clientX;
-      var newW = Math.max(MIN_WIDTH, Math.min(window.innerWidth * 0.5, startW + delta));
-      panel.style.width = newW + "px";
-      panelWidth = newW;
+      panelWidth = clampWidth(startW + delta);
+      panel.style.width = panelWidth + "px";
     }
     function onUp() {
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
-      saveState({ width: panelWidth });
+      panel.classList.remove("ek-dragging");
+      saveState({ width: panelWidth, expanded: isExpanded });
     }
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
@@ -151,7 +192,7 @@
   // --- Responsive ---
   window.addEventListener("resize", function () {
     isMobile = window.innerWidth < 768;
-    if (isMobile && isOpen) panel.style.width = "100vw";
-    else if (isOpen) panel.style.width = panelWidth + "px";
+    panelWidth = clampWidth(panelWidth);
+    applyWidth();
   });
 })();
