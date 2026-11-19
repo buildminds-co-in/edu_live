@@ -23,8 +23,10 @@
 - Manual checks: <what was tested, by whom>
 
 ## Prod deployment
+- Deployed with `npm run deploy:prod` from tag `vX.Y.Z` (Worker and frontend, both tagged `vX.Y.Z`, even if the frontend did not change)
 - Worker version: <new id> (previous: <id>)
 - Frontend version: <new id> (previous: <id>)
+- `npx wrangler versions list --env production` shows tag `vX.Y.Z` in both worker/ and frontend/
 - Smoke test: chat answers / `/admin/config` returns 401 without key / dashboard loads with key
 
 ## Rollback
